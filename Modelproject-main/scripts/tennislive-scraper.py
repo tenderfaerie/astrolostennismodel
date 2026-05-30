@@ -27,11 +27,20 @@ BASE = "https://www.tennislive.net"
 CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.tennislive.net/",
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "accept-encoding": "gzip, deflate, br, zstd",
+    "accept-language": "en-US,en;q=0.9",
+    "cache-control": "max-age=0",
+    "referer": "https://www.tennislive.net/",
+    "sec-ch-ua": '"Chromium";v="148", "Microsoft Edge";v="148", "Not/A)Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "document",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-site": "same-origin",
+    "upgrade-insecure-requests": "1",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36 Edg/148.0.0.0",
 }
 
 # Column header → surface key in our output
@@ -69,19 +78,30 @@ def player_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower().strip()).strip("-")
 
 def fetch_html(url: str) -> str:
-    """Fetch using tls_client to bypass Cloudflare."""
+    """Fetch using tls_client to bypass Cloudflare browser checks.
+    Replicates exact Chrome/Edge 148 TLS fingerprint + headers seen in network logs.
+    vis_co=EN cookie ensures English content.
+    """
     try:
         import tls_client
         session = tls_client.Session(
-            client_identifier="chrome_124",
+            client_identifier="chrome_120",  # closest to Edge 148 (Chromium-based)
             random_tls_extension_order=True
         )
-        resp = session.get(url, headers=HEADERS, timeout_seconds=20)
+        # vis_co=EN forces English; PHPSESSID not needed for static profile pages
+        session.cookies.update({"vis_co": "EN"})
+        resp = session.get(url, headers=HEADERS, timeout_seconds=25)
+        if resp.status_code == 403:
+            raise RuntimeError(f"Cloudflare blocked (403): {url}")
         return resp.text
     except ImportError:
+        # Fallback: plain urllib (may fail on Cloudflare-protected pages)
         import urllib.request
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=20) as r:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": HEADERS["user-agent"],
+            "Accept-Language": HEADERS["accept-language"],
+        })
+        with urllib.request.urlopen(req, timeout=25) as r:
             return r.read().decode("utf-8", errors="ignore")
 
 # ── Player profile (server-rendered HTML) ────────────────────────────────────
