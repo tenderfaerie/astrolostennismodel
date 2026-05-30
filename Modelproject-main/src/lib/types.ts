@@ -64,7 +64,7 @@ export type LiveMatch = {
 export type PlayerSummary = {
   playerId: string;
   name: string;
-  tour: "ATP" | "WTA";
+  tour: Tour;
   hand?: string;
   height?: number | null;
   country?: string;

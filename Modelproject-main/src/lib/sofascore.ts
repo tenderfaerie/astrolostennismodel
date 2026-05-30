@@ -109,6 +109,44 @@ export async function getSofaScoreLiveTennis(): Promise<LiveMatch[]> {
   throw new Error(errors.join(" | "));
 }
 
+export async function getSofaScoreUpcomingTennis(): Promise<LiveMatch[]> {
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const dates = [today, tomorrow].map((d) => d.toISOString().slice(0, 10));
+
+  const all: LiveMatch[] = [];
+  for (const date of dates) {
+    try {
+      const data = await fetchJson<SofaLiveResponse>(`${BASE_URL}/sport/tennis/scheduled-events/${date}`);
+      const events = (data.events ?? []).filter((e) => e.status?.type === "notstarted");
+      all.push(...events.map(normalizeEvent));
+    } catch {
+      // skip dates that fail
+    }
+  }
+  return all;
+}
+
+export async function getSofaScoreFinishedTennis(): Promise<LiveMatch[]> {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const dates = [yesterday, today].map((d) => d.toISOString().slice(0, 10));
+
+  const all: LiveMatch[] = [];
+  for (const date of dates) {
+    try {
+      const data = await fetchJson<SofaLiveResponse>(`${BASE_URL}/sport/tennis/scheduled-events/${date}`);
+      const events = (data.events ?? []).filter((e) => e.status?.type === "finished");
+      all.push(...events.map(normalizeEvent));
+    } catch {
+      // skip dates that fail
+    }
+  }
+  return all;
+}
+
 export function getPrototypeLiveTennis(reason: string): LiveMatch[] {
   const fetchedAt = new Date().toISOString();
 

@@ -16,6 +16,9 @@ const matchFiles = [
   ["Futures", "atp_matches_futures_2024.csv"],
   ["Futures", "atp_matches_futures_2025.csv"],
   ["Futures", "atp_matches_futures_2026.csv"],
+  ["ITF Men", "atp_matches_itf_2024.csv"],
+  ["ITF Men", "atp_matches_itf_2025.csv"],
+  ["ITF Men", "atp_matches_itf_2026.csv"],
   ["WTA", "wta_matches_2024.csv"],
   ["WTA", "wta_matches_2025.csv"],
   ["WTA", "wta_matches_2026.csv"],
@@ -94,17 +97,21 @@ for (const [tour, file] of rankingFiles) {
   }
 }
 
+// Lower number = more prestigious; used to pick the best tour label per player
+const tourPriority = { ATP: 0, WTA: 0, Challenger: 1, Futures: 2, "ITF Men": 3, "ITF Women": 3 };
+
 const players = new Map();
 
 function ensurePlayer(tour, row, side) {
   const id = row[`${side}_id`];
-  const key = playerKey(tour === "WTA" || tour === "ITF Women" ? "WTA" : "ATP", id);
+  const rankingTour = (tour === "WTA" || tour === "ITF Women") ? "WTA" : "ATP";
+  const key = playerKey(rankingTour, id);
   if (!players.has(key)) {
     const ranking = rankings.get(key) ?? {};
     players.set(key, {
       playerId: id,
       name: row[`${side}_name`],
-      tour: key.startsWith("WTA") ? "WTA" : "ATP",
+      tour,
       hand: row[`${side}_hand`] || undefined,
       height: number(row[`${side}_ht`]),
       country: row[`${side}_ioc`] || undefined,
@@ -127,6 +134,13 @@ function ensurePlayer(tour, row, side) {
       surfaces: {},
       recentMatches: []
     });
+  }
+  } else {
+    // Upgrade tour to most prestigious level seen across all files
+    const player = players.get(key);
+    if ((tourPriority[tour] ?? 99) < (tourPriority[player.tour] ?? 99)) {
+      player.tour = tour;
+    }
   }
   return players.get(key);
 }

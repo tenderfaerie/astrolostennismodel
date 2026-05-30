@@ -466,6 +466,152 @@ a {
   color: var(--red);
 }
 
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+.filterRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.filterPill {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.filterPill:hover {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.filterPill.active {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.tourBadge {
+  display: inline-block;
+  border: 1px solid;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.playerMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  flex-wrap: wrap;
+}
+
+.playerTopRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.expandBtn {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  border-radius: 4px;
+  padding: 3px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.expandBtn:hover {
+  border-color: var(--text);
+  color: var(--text);
+}
+
+.surfaceSection,
+.recentSection {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.surfaceHeader {
+  font-size: 12px;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.surfaceGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 6px;
+}
+
+.surfaceCell {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: grid;
+  gap: 2px;
+}
+
+.surfaceCell strong {
+  font-size: 18px;
+}
+
+.recentRow {
+  display: grid;
+  grid-template-columns: 24px 1fr auto auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.recentRow:last-child {
+  border-bottom: 0;
+}
+
+.resultW {
+  color: var(--green);
+  font-weight: 800;
+}
+
+.resultL {
+  color: var(--red);
+  font-weight: 800;
+}
+
+.recentScore {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.timeChip {
+  color: var(--blue);
+  border: 1px solid rgba(104, 167, 255, 0.35);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 @media (max-width: 920px) {
   .shell {
     grid-template-columns: 1fr;
@@ -479,7 +625,7 @@ a {
   }
 
   .nav {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 
   .grid {
