@@ -607,6 +607,8 @@ export default function Home() {
   const [finishedWarning, setFinishedWarning] = useState("");
   const [lastRefresh, setLastRefresh] = useState("");
   const [matchTourFilter, setMatchTourFilter] = useState("");
+  const [dataUpdating, setDataUpdating] = useState(false);
+  const [dataUpdateMsg, setDataUpdateMsg] = useState("");
 
   // Players
   const [players, setPlayers] = useState<PlayerSummary[]>([]);
@@ -694,6 +696,27 @@ export default function Home() {
     [projections, minConfidence]
   );
 
+  async function refreshData() {
+    setDataUpdating(true);
+    setDataUpdateMsg("");
+    try {
+      const d = await fetch("/api/update-data", { method: "POST" }).then((r) => r.json());
+      if (d.anyUpdated) {
+        const updated = d.results.filter((r: { status: string; label: string; remoteRows: number }) => r.status === "updated").map((r: { label: string; remoteRows: number }) => `${r.label} (${r.remoteRows} rows)`);
+        setDataUpdateMsg(`Updated: ${updated.join(", ")}. ${d.importResult ?? ""}`);
+        // Reload players after re-import
+        fetch(`/api/players?q=`).then((r) => r.json()).then((d) => setPlayers(d.players ?? [])).catch(() => {});
+      } else {
+        const latest = d.results.find((r: { latestDate?: string }) => r.latestDate)?.latestDate ?? "unknown";
+        setDataUpdateMsg(`Already current — latest data: ${latest}`);
+      }
+    } catch {
+      setDataUpdateMsg("Update failed — check server logs");
+    } finally {
+      setDataUpdating(false);
+    }
+  }
+
   function toggleSelectPlayer(name: string) {
     setSelectedPlayers((prev) => {
       if (prev.includes(name)) return prev.filter((n) => n !== name);
@@ -740,11 +763,19 @@ export default function Home() {
         <div className="topbar">
           <div>
             <h1>{tabLabel[activeTab]}</h1>
-            <p>ATP · WTA · ITF Men · ITF Women · Challenger · Futures</p>
+            <p>ATP · WTA · ITF Women · Challenger · Futures</p>
           </div>
-          {activeTab === "players" ? (
-            <input className="search" placeholder="Search players" value={query} onChange={(e) => setQuery(e.target.value)} />
-          ) : null}
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {activeTab === "players" ? (
+              <input className="search" placeholder="Search players" value={query} onChange={(e) => setQuery(e.target.value)} />
+            ) : null}
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+              <button className="secondaryButton" style={{ padding: "6px 14px", fontSize: 12, opacity: dataUpdating ? 0.6 : 1 }} onClick={refreshData} disabled={dataUpdating}>
+                {dataUpdating ? "⟳ Checking..." : "⟳ Refresh Data"}
+              </button>
+              {dataUpdateMsg ? <span style={{ fontSize: 11, color: "var(--muted)", maxWidth: 260, textAlign: "right" }}>{dataUpdateMsg}</span> : null}
+            </div>
+          </div>
         </div>
 
         {matchTabs ? (
