@@ -123,10 +123,13 @@ def fetch(url: str, retries: int = MAX_RETRIES) -> str:
                 return ""
             if resp.status_code == 200:
                 html = resp.text
-                # Cloudflare challenge pages are small and contain "challenge"
-                if len(html) > 5000 and "challenge" not in html[:500].lower():
+                # Show first 300 chars for diagnosis
+                preview = html[:300].replace("\n", " ").strip()
+                print(f"  [fetch] {url} — {len(html)} bytes | {preview[:120]}")
+                # Cloudflare challenge pages are small or contain challenge markers
+                if len(html) > 8000 and not any(x in html[:1000].lower() for x in
+                        ("challenge", "cf-browser-verification", "just a moment", "enable javascript")):
                     return html
-                # Looks like a challenge page — fall through to Playwright
                 print(f"  [CF challenge] falling back to Playwright for {url}")
                 break
             print(f"  [HTTP {resp.status_code}] {url} attempt {attempt+1}", file=sys.stderr)
@@ -135,9 +138,12 @@ def fetch(url: str, retries: int = MAX_RETRIES) -> str:
             break
 
     # Playwright fallback — real browser, handles Cloudflare
+    print(f"  [Playwright] launching browser for {url}")
     for attempt in range(2):
         try:
-            return fetch_playwright_sync(url)
+            html = fetch_playwright_sync(url)
+            print(f"  [Playwright] got {len(html)} bytes from {url}")
+            return html
         except Exception as e:
             print(f"  [Playwright ERR] {url} attempt {attempt+1}: {e}", file=sys.stderr)
             time.sleep(3)
@@ -188,6 +194,7 @@ def scrape_rankings(tour: str) -> list[dict]:
 
     players = []
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
+    print(f"  [parse] found {len(rows)} <tr> rows in HTML")
     for row in rows:
         cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
         texts = [strip_tags(c) for c in cells]
