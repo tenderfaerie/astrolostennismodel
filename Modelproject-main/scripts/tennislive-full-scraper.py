@@ -184,26 +184,46 @@ def player_slug(name: str) -> str:
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
 def scrape_rankings(tour: str) -> list[dict]:
-    """Scrape rankings for ATP or WTA, returns [{rank, name, country, points, slug}]"""
+    """Scrape rankings via Playwright (page is JS-rendered)."""
+    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
     path_key = "atp" if tour == "atp" else "wta"
     url = f"{BASE}/{path_key}/ranking/"
-    print(f"  Fetching {url}")
-    html = fetch(url)
-    if not html:
-        return []
+    print(f"  Fetching rankings via Playwright: {url}")
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--ignore-certificate-errors",
+                  "--disable-blink-features=AutomationControlled"],
+        )
+        ctx = browser.new_context(user_agent=HEADERS["user-agent"], locale="en-US")
+        page = ctx.new_page()
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            page.wait_for_selector("table tr", timeout=10000)
+        except PlaywrightTimeout:
+            print("  [rankings] timed out waiting for table rows")
+        html = page.content()
+        browser.close()
 
     players = []
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
-    print(f"  [parse] found {len(rows)} <tr> rows in HTML")
+    print(f"  [parse] found {len(rows)} <tr> rows in HTML ({len(html)} bytes)")
+
     for row in rows:
         cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
-        texts = [strip_tags(c) for c in cells]
+        texts = [strip_tags(c).strip() for c in cells]
         if len(texts) < 3:
             continue
+        # First cell must be a numeric rank
         try:
-            rank = int(texts[0])
-        except ValueError:
+            rank = int(re.sub(r"[^\d]", "", texts[0]))
+            if rank <= 0:
+                continue
+        except (ValueError, TypeError):
             continue
+        # Player link: /atp/slug/ or /wta/slug/
         slug_m = re.search(r'href="[^"]*/(?:atp|wta)/([^/"]+)/"', row)
         slug = slug_m.group(1) if slug_m else player_slug(texts[1])
         players.append({
@@ -552,6 +572,21 @@ def cmd_player(tour: str, slug: str):
 # ── Live / Upcoming / Finished scores (Playwright) ───────────────────────────
 TAB_TEXT = {"live": "live tennis", "upcoming": "scheduled", "finished": "finished"}
 
+# Day-of-week abbreviations used in calendar navigation rows
+_WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+
+def _extract_player_links(row_html: str) -> list[tuple[str, str]]:
+    """Return [(slug, display_name), ...] for /atp/ or /wta/ player profile links.
+    Excludes the H2H link which points to /atp/h2h/ or similar."""
+    found = re.findall(
+        r'href="/(?:atp|wta)/([^/"]+)/"[^>]*>\s*([^<]{2,40})\s*</a>',
+        row_html, re.IGNORECASE
+    )
+    # Filter out non-player links (H2H pages, flag images, etc.)
+    return [(slug, name.strip()) for slug, name in found
+            if "h2h" not in slug.lower() and name.strip()
+            and not re.match(r"^\d+$", name.strip())]
+
 async def scrape_scores_async(mode: str) -> list[dict]:
     from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
@@ -584,36 +619,85 @@ async def scrape_scores_async(mode: str) -> list[dict]:
         current_tournament = "Unknown"
         current_surface = "Unknown"
         current_tour = "ATP"
+        status_type = "inprogress" if mode == "live" else (
+            "notstarted" if mode == "upcoming" else "finished")
+        status_label = "Live" if mode == "live" else ("Scheduled" if mode == "upcoming" else "Finished")
 
         for row in await page.query_selector_all("table tr"):
             cells = await row.query_selector_all("td, th")
             texts = [(await c.inner_text()).strip() for c in cells]
-            if not texts:
+            row_html = await row.inner_html()
+
+            if not any(texts):
                 continue
 
-            if len(cells) <= 3:
-                full = " ".join(t for t in texts if t)
-                if full and len(full) < 100 and not full[0].isdigit():
+            # ── Calendar navigation rows ─────────────────────────────────────
+            # These contain day-of-week abbreviations like "Mon", "Tue", etc.
+            if any(t.lower() in _WEEKDAYS for t in texts):
+                continue
+
+            # ── Column-header / tournament sub-header rows ───────────────────
+            # These look like: ["Paris", "1", "2", "3", "4", "5", "sets", "H2H"]
+            # The presence of the literal text "sets" (case-insensitive) marks this.
+            lower_texts = [t.lower() for t in texts]
+            if "sets" in lower_texts:
+                # Extract tournament name: first non-empty, non-digit, non-keyword text
+                skip_words = {"sets", "h2h", "1", "2", "3", "4", "5", "s1", "s2", "s3", "s4", "s5"}
+                t_name = next(
+                    (t for t in texts if t and t.lower() not in skip_words
+                     and not re.match(r"^\d+$", t)),
+                    None
+                )
+                if t_name:
+                    current_tournament = t_name
+                    current_surface = infer_surface(t_name)
+                    current_tour = infer_tour(t_name)
+                continue
+
+            # ── Single-cell / very short rows — big tournament section headers ─
+            if len(cells) <= 2:
+                full = " ".join(t for t in texts if t).strip()
+                if full and not any(c.isdigit() for c in full[:3]):
                     current_tournament = full
                     current_surface = infer_surface(full)
                     current_tour = infer_tour(full)
                 continue
 
-            if len(cells) < 4:
+            # ── Extract player names from anchor href links ───────────────────
+            # Player links look like /atp/cerundolo/ or /wta/keys/
+            player_links = _extract_player_links(row_html)
+            if len(player_links) < 2:
+                # Not a match row (no two recognisable player links)
                 continue
 
-            names = [t for t in texts if t and not re.match(r"^\d{0,2}$", t)
-                     and not re.match(r"\d{1,2}:\d{2}", t) and len(t) > 1]
-            if len(names) < 2:
-                continue
+            home_slug, home_name = player_links[0]
+            away_slug, away_name = player_links[1]
 
-            nums = [int(t) for t in texts if re.match(r"^\d$", t) and int(t) <= 7]
-            mid = len(nums) // 2
-            period_scores = [{"period": f"S{i+1}", "home": nums[i], "away": nums[mid+i]}
-                             for i in range(min(mid, 5))]
-            time_str = next((t for t in texts if re.match(r"\d{1,2}:\d{2}", t)), None)
-            status_type = "inprogress" if mode == "live" else (
-                "notstarted" if mode == "upcoming" else "finished")
+            # ── Scores ───────────────────────────────────────────────────────
+            # Single-digit cells (≤ 7) are set/game scores. Typical layout:
+            #   time | player | s1_home | s2_home | s3_home | s1_away | s2_away | s3_away | H2H
+            # The scores split at the midpoint: first half = home, second half = away.
+            nums = [int(t) for t in texts if re.match(r"^\d{1,2}$", t) and int(t) <= 99]
+            # Only consider scores ≤ 7 (set/tiebreak-like values)
+            set_nums = [n for n in nums if n <= 7]
+            mid = len(set_nums) // 2
+            period_scores = []
+            for i in range(min(mid, 5)):
+                period_scores.append({
+                    "period": f"S{i+1}",
+                    "home": set_nums[i],
+                    "away": set_nums[mid + i],
+                })
+
+            time_str = next((t for t in texts if re.match(r"^\d{1,2}:\d{2}", t)), None)
+            # Clean up time (may have round info appended after newline)
+            if time_str and "\n" in time_str:
+                time_str = time_str.split("\n")[0].strip()
+
+            # Round info may appear in texts[0] after the time
+            round_info = ""
+            if texts[0] and "\n" in texts[0]:
+                round_info = texts[0].split("\n", 1)[1].strip()
 
             matches.append({
                 "provider": "tennislive",
@@ -621,13 +705,16 @@ async def scrape_scores_async(mode: str) -> list[dict]:
                 "tournament": current_tournament,
                 "category": current_tour,
                 "surface": current_surface,
-                "status": "Live" if mode == "live" else ("Scheduled" if mode == "upcoming" else "Finished"),
+                "status": status_label,
                 "statusType": status_type,
                 "startTime": time_str,
-                "homePlayer": names[0],
-                "awayPlayer": names[1],
-                "homeScore": nums[0] if nums else None,
-                "awayScore": nums[mid] if mid > 0 else None,
+                "round": round_info or None,
+                "homePlayer": home_name,
+                "homeSlug": home_slug,
+                "awayPlayer": away_name,
+                "awaySlug": away_slug,
+                "homeScore": set_nums[0] if set_nums else None,
+                "awayScore": set_nums[mid] if mid > 0 else None,
                 "periodScores": period_scores,
                 "fetchedAt": fetched_at,
             })
