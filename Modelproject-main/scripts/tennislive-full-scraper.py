@@ -46,7 +46,6 @@ HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
               "image/avif,image/webp,image/apng,*/*;q=0.8,"
               "application/signed-exchange;v=b3;q=0.7",
-    "accept-encoding": "gzip, deflate, br, zstd",
     "accept-language": "en-US,en;q=0.9",
     "cache-control": "max-age=0",
     "referer": "https://www.tennislive.net/",
@@ -122,10 +121,24 @@ def fetch(url: str, retries: int = MAX_RETRIES) -> str:
             if resp.status_code == 404:
                 return ""
             if resp.status_code == 200:
-                html = resp.text
-                # Show first 300 chars for diagnosis
-                preview = html[:300].replace("\n", " ").strip()
-                print(f"  [fetch] {url} — {len(html)} bytes | {preview[:120]}")
+                # tls_client may return raw compressed bytes via .text;
+                # try to decode content bytes explicitly first
+                try:
+                    raw = resp.content
+                    if raw[:2] in (b"\x1f\x8b", b"\x78\x9c", b"\x78\x01"):
+                        # gzip or zlib — decompress
+                        import zlib, gzip as _gzip
+                        try:
+                            html = _gzip.decompress(raw).decode("utf-8", errors="replace")
+                        except Exception:
+                            html = zlib.decompress(raw, -15).decode("utf-8", errors="replace")
+                    else:
+                        html = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    html = resp.text
+                # Show first 120 chars for diagnosis (ASCII only)
+                preview = "".join(c if c.isprintable() else "?" for c in html[:120])
+                print(f"  [fetch] {url} — {len(html)} bytes | {preview}")
                 # Cloudflare challenge pages are small or contain challenge markers
                 if len(html) > 8000 and not any(x in html[:1000].lower() for x in
                         ("challenge", "cf-browser-verification", "just a moment", "enable javascript")):
