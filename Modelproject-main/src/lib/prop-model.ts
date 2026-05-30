@@ -126,6 +126,88 @@ function projectCategory(player: PlayerSummary, categoryId: string, opponent?: P
   }
 }
 
+function detectBait(
+  player: PlayerSummary,
+  categoryId: string,
+  line: number,
+  projection: number,
+  side: "Over" | "Under" | "Pass",
+  opponent?: PlayerSummary | null
+): { baitFlag: "bait" | "caution" | null; baitReasons: string[] } {
+  const reasons: string[] = [];
+  let score = 0;
+  const wta = isWTA(player);
+
+  const wr = player.winPct;
+  const owr = opponent?.winPct ?? 0.5;
+
+  if (categoryId === "fantasy_score" || categoryId === "total_games" || categoryId === "games_won") {
+    // Compute outcome-range bounds
+    const acePm = aceProjection(player);
+    const dfPm  = dfProjection(player);
+
+    let floor: number, ceil: number;
+    if (categoryId === "fantasy_score") {
+      // Floor = straight-set loss, Ceil = dominant straight-set win
+      if (wta) {
+        floor = 10 + 5 - 12 + 3*0 - 3*2 + 0.5*acePm - 0.5*dfPm;
+        ceil  = 10 + 15 - 8  + 3*2 - 3*0 + 0.5*acePm - 0.5*dfPm;
+      } else {
+        floor = 10 + 10 - 20 + 3*0 - 3*3 + 0.5*acePm - 0.5*dfPm;
+        ceil  = 10 + 22 - 10 + 3*3 - 3*0 + 0.5*acePm - 0.5*dfPm;
+      }
+      if (side === "Over" && line >= ceil * 0.88) {
+        score += 2;
+        reasons.push(`Line ${line} is near the realistic ceiling (~${ceil.toFixed(1)}) — requires near-perfect result to cash`);
+      }
+      if (side === "Under" && line <= floor * 1.12 && floor > 0) {
+        score += 2;
+        reasons.push(`Line ${line} near the realistic floor (~${floor.toFixed(1)}) — requires a catastrophic loss to cash`);
+      }
+    }
+
+    if (categoryId === "games_won") {
+      floor = wta ? 5 : 10;
+      ceil  = wta ? 16 : 22;
+      if (side === "Over" && line >= ceil * 0.9) {
+        score += 2;
+        reasons.push(`Games Won line ${line} near max possible (${ceil}) — requires dominant win to clear`);
+      }
+    }
+
+    if (categoryId === "total_games") {
+      floor = wta ? 14 : 28;
+      ceil  = wta ? 28 : 50;
+      if (side === "Under" && line <= floor * 1.1) {
+        score += 2;
+        reasons.push(`Total Games UNDER ${line} near minimum possible (${floor}) — match would have to end in a bagel`);
+      }
+    }
+  }
+
+  // Heavy underdog on a high OVER line
+  if (owr - wr > 0.18 && side === "Over" && projection < line) {
+    score += 1;
+    reasons.push(`Player is a heavy underdog (WR ${(wr*100).toFixed(0)}% vs opp ${(owr*100).toFixed(0)}%) — likely losing scenario suppresses stat`);
+  }
+
+  // Line is on the wrong side of projection but only just barely
+  if ((side === "Over" && line > projection) || (side === "Under" && line < projection)) {
+    score += 1;
+    reasons.push(`Line (${line}) is on the unprofitable side of projection (${projection}) — model says fade`);
+  }
+
+  // Sample size warning compounds bait risk
+  if (player.matches < 15 && score > 0) {
+    score += 1;
+    reasons.push(`Low sample size (${player.matches} matches) — projection is less reliable`);
+  }
+
+  const baitFlag: "bait" | "caution" | null =
+    score >= 3 ? "bait" : score >= 1 ? "caution" : null;
+  return { baitFlag, baitReasons: reasons };
+}
+
 export function projectProp(
   player: PlayerSummary,
   market: string,
@@ -143,6 +225,8 @@ export function projectProp(
   const distance = clamp(Math.abs(rawEdge) / Math.max(1, Math.abs(line)), 0, 0.35);
   const confidence = Math.round(clamp(50 + distance * 95 + stability * 16, 1, 92));
 
+  const { baitFlag, baitReasons } = detectBait(player, category.id, line, projection, side, opponent);
+
   return {
     player: player.name,
     opponent: opponent?.name,
@@ -154,7 +238,9 @@ export function projectProp(
     edge: Number(edge.toFixed(2)),
     confidence,
     sampleSize: player.matches,
-    note: projected.note
+    note: projected.note,
+    baitFlag,
+    baitReasons
   };
 }
 

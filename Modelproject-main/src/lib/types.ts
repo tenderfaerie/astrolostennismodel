@@ -111,6 +111,8 @@ export type PropProjection = {
   kellyPct?: number;
   impliedProb?: number;
   modelProb?: number;
+  baitFlag?: "bait" | "caution" | null;
+  baitReasons?: string[];
 };
 
 export type H2HRecord = {
