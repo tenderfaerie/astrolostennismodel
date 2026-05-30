@@ -184,127 +184,17 @@ def player_slug(name: str) -> str:
 
 # ── Rankings ──────────────────────────────────────────────────────────────────
 def scrape_rankings(tour: str) -> list[dict]:
-    """Scrape rankings via Playwright DOM API (page uses div-based layout, no <table>)."""
+    """Scrape rankings page via Playwright then parse with regex.
+
+    The page has a real <table> with <tr class="pair|unpair"> rows.
+    Ranks are formatted "1." (with a period). Player names come from
+    the <a title="..."> attribute. Country code is in (ITA) parenthetical.
+    """
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
     path_key = "atp" if tour == "atp" else "wta"
     url = f"{BASE}/{path_key}/ranking/"
     print(f"  Fetching {url}")
-
-    players = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--ignore-certificate-errors",
-                  "--disable-blink-features=AutomationControlled"],
-        )
-        ctx = browser.new_context(user_agent=HEADERS["user-agent"], locale="en-US")
-        page = ctx.new_page()
-        page.goto(url, wait_until="networkidle", timeout=30000)
-
-        # Wait for ranking content — try common selectors
-        for sel in (".body_box", "#ranking_body", ".ranking_row", ".player_rank", "div.body_box"):
-            try:
-                page.wait_for_selector(sel, timeout=4000)
-                print(f"  [rankings] found content via selector: {sel}")
-                break
-            except PlaywrightTimeout:
-                continue
-
-        # Strategy 1: div.body_box contains player rows as direct children
-        # Each child div has sub-elements: rank, name link, country, points
-        body_rows = page.query_selector_all(".body_box > div, .body_box > a")
-        print(f"  [rankings] .body_box children: {len(body_rows)}")
-
-        if body_rows:
-            for el in body_rows:
-                try:
-                    row_text = el.inner_text().strip()
-                    if not row_text:
-                        continue
-                    # Extract rank from first numeric token
-                    rank_m = re.match(r"(\d+)", row_text)
-                    if not rank_m:
-                        continue
-                    rank = int(rank_m.group(1))
-                    if rank > 2000:
-                        continue
-
-                    # Player link
-                    link = el.query_selector("a[href*='/atp/'], a[href*='/wta/']")
-                    name = link.inner_text().strip() if link else ""
-                    href = link.get_attribute("href") if link else ""
-                    slug_m = re.search(r"/(?:atp|wta)/([^/]+)/", href or "")
-                    slug = slug_m.group(1) if slug_m else player_slug(name)
-
-                    # Country and points: remaining text tokens after rank and name
-                    parts = [t.strip() for t in row_text.split("\n") if t.strip()]
-                    country = ""
-                    points = ""
-                    if len(parts) >= 3:
-                        country = parts[2] if len(parts) > 2 else ""
-                        points = parts[3] if len(parts) > 3 else ""
-
-                    if name:
-                        players.append({
-                            "rank": rank, "name": name, "country": country,
-                            "points": points, "slug": slug, "tour": tour.upper(),
-                        })
-                except Exception as e:
-                    continue
-
-        # Strategy 2: fallback — any element with a numeric rank + /atp/ or /wta/ link
-        if not players:
-            print("  [rankings] body_box strategy failed, trying link scan...")
-            links = page.query_selector_all(f"a[href*='/{path_key}/']")
-            seen_slugs: set[str] = set()
-            for link in links:
-                try:
-                    href = link.get_attribute("href") or ""
-                    slug_m = re.search(r"/(?:atp|wta)/([^/]+)/", href)
-                    if not slug_m:
-                        continue
-                    slug = slug_m.group(1)
-                    if slug in seen_slugs or slug in ("ranking", "results", "h2h", ""):
-                        continue
-                    name = link.inner_text().strip()
-                    if not name or len(name) < 2 or name.isdigit():
-                        continue
-                    # Try to find rank in parent element
-                    parent_text = ""
-                    try:
-                        parent = link.evaluate("el => el.closest('div') ? el.closest('div').innerText : ''")
-                        parent_text = str(parent).strip()
-                    except Exception:
-                        pass
-                    rank_m = re.match(r"(\d+)", parent_text)
-                    if not rank_m:
-                        continue
-                    rank = int(rank_m.group(1))
-                    if rank > 2000:
-                        continue
-                    seen_slugs.add(slug)
-                    players.append({
-                        "rank": rank, "name": name, "country": "",
-                        "points": "", "slug": slug, "tour": tour.upper(),
-                    })
-                except Exception:
-                    continue
-            players.sort(key=lambda x: x["rank"])
-
-        browser.close()
-
-    print(f"  Found {len(players)} {tour.upper()} ranked players")
-    return players
-
-def cmd_debug_rankings(tour: str = "atp"):
-    """Dump rankings page structure for analysis."""
-    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
-
-    path_key = "atp" if tour == "atp" else "wta"
-    url = f"{BASE}/{path_key}/ranking/"
-    print(f"Fetching {url} for debug...")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -316,31 +206,61 @@ def cmd_debug_rankings(tour: str = "atp"):
         page = ctx.new_page()
         page.goto(url, wait_until="networkidle", timeout=30000)
         try:
-            page.wait_for_selector(".body_box, table", timeout=8000)
+            # Wait for actual ranking rows — class pair/unpair
+            page.wait_for_selector("tr.pair, tr.unpair", timeout=8000)
         except PlaywrightTimeout:
-            pass
-
+            print("  [rankings] timed out waiting for tr.pair/tr.unpair")
         html = page.content()
-
-        # Dump body_box inner HTML for inspection
-        body_html = ""
-        body_el = page.query_selector(".body_box")
-        if body_el:
-            body_html = body_el.inner_html()
-            print(f"\n.body_box inner HTML (first 3000 chars):\n{body_html[:3000]}")
-        else:
-            print("\nNo .body_box found! Checking all divs with class containing 'body':")
-            for el in page.query_selector_all("div[class*='body'], div[class*='rank'], div[id*='rank']"):
-                cls = el.get_attribute("class") or el.get_attribute("id") or ""
-                txt = el.inner_text()[:100].replace("\n", " ").strip()
-                print(f"  {cls}: {txt}")
-
         browser.close()
 
-    out = DATA / "rankings" / f"{tour}-debug.html"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(html[:80000], encoding="utf-8")
-    print(f"\nSaved first 80000 bytes of full HTML → {out}")
+    # Target only ranking rows (skip header and unrelated rows)
+    rows = re.findall(r'<tr\s+class="(?:pair|unpair)"[^>]*>(.*?)</tr>', html, re.DOTALL)
+    print(f"  [parse] {len(html)} bytes, {len(rows)} ranking rows found")
+
+    players = []
+    for row in rows:
+        cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.DOTALL)
+        if len(cells) < 3:
+            continue
+
+        # Rank cell: "1." → strip non-digits
+        rank_str = re.sub(r"[^\d]", "", strip_tags(cells[0]).strip())
+        if not rank_str:
+            continue
+        try:
+            rank = int(rank_str)
+            if rank <= 0 or rank > 2000:
+                continue
+        except ValueError:
+            continue
+
+        # Name cell: <img flag> <a href="/atp/slug/" title="Full Name">Full Name</a> (CTY) (age)
+        name_m = re.search(r'title="([^"]+)"', cells[1])
+        name = name_m.group(1).strip() if name_m else strip_tags(cells[1]).split("(")[0].strip()
+        if not name or len(name) < 2:
+            continue
+
+        slug_m = re.search(r'/(?:atp|wta)/([^/"]+)/', cells[1])
+        slug = slug_m.group(1) if slug_m else player_slug(name)
+
+        country_m = re.search(r'\(([A-Z]{2,3})\)', strip_tags(cells[1]))
+        country = country_m.group(1) if country_m else ""
+
+        points = strip_tags(cells[2]).strip()
+
+        players.append({
+            "rank": rank, "name": name, "country": country,
+            "points": points, "slug": slug, "tour": tour.upper(),
+        })
+
+    print(f"  Found {len(players)} {tour.upper()} ranked players")
+    return players
+
+def cmd_debug_rankings(tour: str = "atp"):
+    """Quick rankings parse test — prints first 5 players found."""
+    players = scrape_rankings(tour)
+    for p in players[:5]:
+        print(f"  #{p['rank']} {p['name']} ({p['country']}) — {p['points']} pts  [{p['slug']}]")
 
 def cmd_rankings():
     for tour in ("atp", "wta"):
