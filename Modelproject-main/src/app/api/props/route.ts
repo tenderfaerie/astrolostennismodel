@@ -12,6 +12,9 @@ const linePattern = new RegExp(`(.+?)\\s+(${marketPattern})\\s+(over|under|o|u)?
 export async function POST(request: NextRequest) {
   const body = await request.json().catch(() => ({}));
 
+  const surface = typeof body.surface === "string" ? body.surface : "";
+  const useForm = Boolean(body.useForm);
+
   if (body.player && body.market && body.line !== undefined) {
     let player = await findPlayerByName(String(body.player));
     const opponent = body.opponent ? await findPlayerByName(String(body.opponent)) : undefined;
@@ -21,12 +24,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Player not found", projections: [], unmatched: [String(body.player)] }, { status: 404 });
     }
 
-    const surface = typeof body.surface === "string" ? body.surface : "";
     if (surface && surface !== "All") {
       player = surfaceAdjustedPlayer(player, surface);
       if (opponentAdj) opponentAdj = surfaceAdjustedPlayer(opponentAdj, surface);
     }
-    if (body.useForm) {
+    if (useForm) {
       player = formAdjustedPlayer(player);
       if (opponentAdj) opponentAdj = formAdjustedPlayer(opponentAdj);
     }
@@ -74,7 +76,10 @@ export async function POST(request: NextRequest) {
     }
 
     const side = sideRaw?.toLowerCase().startsWith("u") ? "Under" : sideRaw ? "Over" : undefined;
-    projections.push(projectProp(player, market, Number(lineRaw), side));
+    let adjustedPlayer = player;
+    if (surface && surface !== "All") adjustedPlayer = surfaceAdjustedPlayer(adjustedPlayer, surface);
+    if (useForm) adjustedPlayer = formAdjustedPlayer(adjustedPlayer);
+    projections.push(projectProp(adjustedPlayer, market, Number(lineRaw), side));
   }
 
   return NextResponse.json({ projections, unmatched });

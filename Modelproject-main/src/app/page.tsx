@@ -128,10 +128,13 @@ function ParlayBuilder({ items, onRemove }: { items: PropProjection[]; onRemove:
         <strong><TrendingUp size={14} /> Parlay Builder</strong>
         <span className="pill">{items.length} leg{items.length > 1 ? "s" : ""}</span>
       </div>
+      {!allHaveOdds ? (
+        <div className="parlayWarning">⚠ Add book odds to each leg to see parlay EV and combined payout.</div>
+      ) : null}
       {items.map((p, i) => (
         <div className="parlayLeg" key={i}>
           <span>{p.player} · {p.market} {p.side} {p.line}</span>
-          {p.americanOdds ? <span className="muted">{money(p.americanOdds)}</span> : null}
+          {p.americanOdds ? <span className="muted">{money(p.americanOdds)}</span> : <span className="muted oddsHint">no odds</span>}
           <button className="removeBtn" onClick={() => onRemove(i)}><Trash2 size={12} /></button>
         </div>
       ))}
@@ -460,6 +463,21 @@ function BetTrackerTab({ players }: { players: PlayerSummary[] }) {
     setBets((prev) => prev.filter((b) => b.id !== id));
   }
 
+  function exportCsv() {
+    const header = ["Date", "Player", "Opponent", "Market", "Line", "Side", "Odds", "Stake", "Status", "Projection", "EV"];
+    const rows = bets.map((b) => [
+      new Date(b.placedAt).toLocaleDateString(),
+      b.player, b.opponent ?? "",
+      b.market, b.line, b.side,
+      b.americanOdds, b.stake, b.status,
+      b.projection ?? "", b.ev ?? ""
+    ]);
+    const csv = [header, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    const a = document.createElement("a"); a.href = url; a.download = "astrotennis-bets.csv"; a.click();
+    URL.revokeObjectURL(url);
+  }
+
   const open = bets.filter((b) => b.status === "open");
   const settled = bets.filter((b) => b.status !== "open");
 
@@ -481,7 +499,10 @@ function BetTrackerTab({ players }: { players: PlayerSummary[] }) {
     <section className="section fullWidth">
       <div className="sectionHeader">
         <h2><BookOpen size={16} /> Bet Tracker</h2>
-        <span className="pill">{open.length} open</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="pill">{open.length} open</span>
+          {bets.length > 0 ? <button className="secondaryButton" style={{ padding: "4px 10px", fontSize: 12 }} onClick={exportCsv}>Export CSV</button> : null}
+        </div>
       </div>
 
       {/* P&L summary */}
@@ -606,6 +627,19 @@ export default function Home() {
   const [propText, setPropText] = useState("Carlos Alcaraz aces over 4.5\nIga Swiatek games won over 12.5");
   const [projections, setProjections] = useState<PropProjection[]>([]);
   const [parlayItems, setParlayItems] = useState<PropProjection[]>([]);
+  const [minConfidence, setMinConfidence] = useState(0);
+  const [propTourFilter, setPropTourFilter] = useState("");
+  const [bankroll, setBankroll] = useState("");
+  const [kellyFraction, setKellyFraction] = useState(0.25);
+
+  // Reset compare mode when leaving players tab
+  useEffect(() => {
+    if (activeTab !== "players") {
+      setCompareMode(false);
+      setSelectedPlayers([]);
+      setMatchupData(null);
+    }
+  }, [activeTab]);
 
   // Live auto-refresh
   const loadLive = useCallback(async () => {
@@ -647,6 +681,16 @@ export default function Home() {
   const filteredPlayers = useMemo(
     () => playerTourFilter ? players.filter((p) => p.tour === playerTourFilter) : players,
     [players, playerTourFilter]
+  );
+
+  const propPlayerOptions = useMemo(
+    () => propTourFilter ? players.filter((p) => p.tour === propTourFilter) : players,
+    [players, propTourFilter]
+  );
+
+  const filteredProjections = useMemo(
+    () => minConfidence > 0 ? projections.filter((p) => p.confidence >= minConfidence) : projections,
+    [projections, minConfidence]
   );
 
   function toggleSelectPlayer(name: string) {
@@ -796,8 +840,21 @@ export default function Home() {
                   <input value={propOdds} inputMode="numeric" onChange={(e) => setPropOdds(e.target.value)} placeholder="-110 or +150" />
                   <span className="muted oddsHint">Enter odds → see EV %</span>
                 </label>
-                <datalist id="prop-players">{players.slice(0, 200).map((p) => <option key={p.playerId} value={p.name} />)}</datalist>
+                <datalist id="prop-players">{propPlayerOptions.slice(0, 200).map((p) => <option key={p.playerId} value={p.name} />)}</datalist>
                 <button className="primaryButton" onClick={analyzeStructuredProp}>Analyze Prop</button>
+              </div>
+
+              {/* Tour filter for player autocomplete */}
+              <div className="propControls">
+                <div className="propControlGroup">
+                  <span className="muted">Player Tour</span>
+                  <div className="filterRow" style={{ marginBottom: 0 }}>
+                    <button className={propTourFilter === "" ? "filterPill active" : "filterPill"} onClick={() => setPropTourFilter("")}>All</button>
+                    {(["ATP","WTA","Challenger","ITF Men","ITF Women","Futures"] as Tour[]).map((t) => (
+                      <button key={t} className={propTourFilter === t ? "filterPill active" : "filterPill"} style={propTourFilter === t ? { borderColor: tourColor(t), color: tourColor(t) } : {}} onClick={() => setPropTourFilter(propTourFilter === t ? "" : t)}>{t}</button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="propBox">
@@ -805,29 +862,66 @@ export default function Home() {
                 <button className="secondaryButton" onClick={analyzePasted}>Analyze Pasted Lines</button>
               </div>
 
-              {projections.map((proj) => (
-                <article className="projection" key={`${proj.player}-${proj.market}-${proj.line}`}>
-                  <div className="matchTop">
-                    <div>
-                      <strong>{proj.player}{proj.opponent ? ` vs ${proj.opponent}` : ""} · {proj.market} {proj.side} {proj.line}</strong>
-                      {proj.surface && proj.surface !== "All" ? <span className="muted"> · {proj.surface}</span> : null}
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span className={proj.side === "Over" ? "edgePositive" : proj.side === "Under" ? "edgeNegative" : "muted"}>
-                        {proj.edge >= 0 ? "+" : ""}{proj.edge}
-                      </span>
-                      <button className="addParlayBtn" onClick={() => addToParlay(proj)} title="Add to parlay">+Parlay</button>
-                    </div>
+              {/* Stake calculator */}
+              {projections.length > 0 ? (
+                <div className="stakeCalc">
+                  <div className="stakeCalcTitle muted">Stake Calculator</div>
+                  <div className="stakeCalcRow">
+                    <label>Bankroll ($)<input value={bankroll} inputMode="decimal" onChange={(e) => setBankroll(e.target.value)} placeholder="1000" /></label>
+                    <label>Kelly Fraction
+                      <select value={kellyFraction} onChange={(e) => setKellyFraction(Number(e.target.value))}>
+                        <option value={1}>Full Kelly</option>
+                        <option value={0.5}>Half Kelly</option>
+                        <option value={0.25}>Quarter Kelly (Recommended)</option>
+                        <option value={0.1}>1/10 Kelly</option>
+                      </select>
+                    </label>
                   </div>
-                  <div className="statGrid">
-                    <div className="stat"><span className="muted">Projection</span><strong>{proj.projection}</strong></div>
-                    <div className="stat"><span className="muted">Confidence</span><strong>{proj.confidence}%</strong></div>
-                    <div className="stat"><span className="muted">Sample</span><strong>{proj.sampleSize}</strong></div>
-                  </div>
-                  <EVPanel proj={proj} />
-                  <p className="muted">{proj.note}</p>
-                </article>
-              ))}
+                </div>
+              ) : null}
+
+              {/* Confidence filter */}
+              {projections.length > 0 ? (
+                <div className="filterRow" style={{ marginTop: 12 }}>
+                  <span className="muted" style={{ marginRight: 4, fontSize: 12 }}>Min confidence:</span>
+                  {[0, 60, 70, 80].map((v) => (
+                    <button key={v} className={minConfidence === v ? "filterPill active" : "filterPill"} onClick={() => setMinConfidence(v)}>{v === 0 ? "Any" : `${v}%+`}</button>
+                  ))}
+                  <span className="muted" style={{ fontSize: 12 }}>{filteredProjections.length} / {projections.length} shown</span>
+                </div>
+              ) : null}
+
+              {filteredProjections.map((proj) => {
+                const bankrollNum = Number(bankroll);
+                const kellyStake = bankrollNum > 0 && proj.kellyPct != null
+                  ? (bankrollNum * (proj.kellyPct / 100) * kellyFraction).toFixed(2)
+                  : null;
+                return (
+                  <article className="projection" key={`${proj.player}-${proj.market}-${proj.line}`}>
+                    <div className="matchTop">
+                      <div>
+                        <strong>{proj.player}{proj.opponent ? ` vs ${proj.opponent}` : ""} · {proj.market} {proj.side} {proj.line}</strong>
+                        {proj.surface && proj.surface !== "All" ? <span className="muted"> · {proj.surface}</span> : null}
+                        {proj.sampleSize < 30 ? <span className="lowSampleBadge" title="Fewer than 30 matches — treat projection with caution">Low sample</span> : null}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span className={proj.side === "Over" ? "edgePositive" : proj.side === "Under" ? "edgeNegative" : "muted"}>
+                          {proj.edge >= 0 ? "+" : ""}{proj.edge}
+                        </span>
+                        <button className="addParlayBtn" onClick={() => addToParlay(proj)} title="Add to parlay">+Parlay</button>
+                      </div>
+                    </div>
+                    <div className="statGrid">
+                      <div className="stat"><span className="muted">Projection</span><strong>{proj.projection}</strong></div>
+                      <div className="stat"><span className="muted">Confidence</span><strong>{proj.confidence}%</strong></div>
+                      <div className="stat"><span className="muted">Sample</span><strong>{proj.sampleSize}</strong></div>
+                      {kellyStake ? <div className="stat"><span className="muted">Kelly Stake</span><strong>${kellyStake}</strong></div> : null}
+                    </div>
+                    <EVPanel proj={proj} />
+                    <p className="muted">{proj.note}</p>
+                  </article>
+                );
+              })}
 
               <ParlayBuilder items={parlayItems} onRemove={removeFromParlay} />
             </section>

@@ -150,9 +150,7 @@ function ensurePlayer(tour, row, side) {
       surfaces: {},
       recentMatches: []
     });
-  }
   } else {
-    // Upgrade tour to most prestigious level seen across all files
     const player = players.get(key);
     if ((tourPriority[tour] ?? 99) < (tourPriority[player.tour] ?? 99)) {
       player.tour = tour;

@@ -41,19 +41,26 @@ function categoryFor(market: string) {
   ) ?? propCategories[0];
 }
 
+function isWTA(player: PlayerSummary): boolean {
+  return player.tour === "WTA" || player.tour === "ITF Women";
+}
+
 function aceProjection(player: PlayerSummary) {
-  const serviceGames = 12.2 + (player.winPct - 0.5) * 2.4;
-  return (player.aceRate ?? 0.065) * serviceGames * 6.2;
+  const base = isWTA(player) ? 10.8 : 12.2;
+  const serviceGames = base + (player.winPct - 0.5) * (isWTA(player) ? 2.0 : 2.4);
+  return (player.aceRate ?? (isWTA(player) ? 0.038 : 0.065)) * serviceGames * 6.1;
 }
 
 function dfProjection(player: PlayerSummary) {
-  const serviceGames = 12.2 + (player.winPct - 0.5) * 2.4;
-  return (player.dfRate ?? 0.035) * serviceGames * 6.2;
+  const base = isWTA(player) ? 10.8 : 12.2;
+  const serviceGames = base + (player.winPct - 0.5) * (isWTA(player) ? 2.0 : 2.4);
+  return (player.dfRate ?? (isWTA(player) ? 0.042 : 0.035)) * serviceGames * 6.1;
 }
 
 function gamesWonProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const base = isWTA(player) ? 10.2 : 11.8;
   const opponentResistance = opponent ? (opponent.winPct - 0.5) * 2.8 : 0;
-  return 11.8 + (player.winPct - 0.5) * 7.5 - opponentResistance;
+  return base + (player.winPct - 0.5) * 7.5 - opponentResistance;
 }
 
 function setsWonProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
@@ -68,8 +75,9 @@ function breakPointsWonProjection(player: PlayerSummary, opponent?: PlayerSummar
 }
 
 function fantasyProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const totalBase = isWTA(player) ? 20.5 : 21.8;
   const gamesWon = gamesWonProjection(player, opponent);
-  const gamesLost = opponent ? gamesWonProjection(opponent, player) : 21.8 - gamesWon;
+  const gamesLost = opponent ? gamesWonProjection(opponent, player) : totalBase - gamesWon;
   const setsWon = setsWonProjection(player, opponent);
   const setsLost = opponent ? setsWonProjection(opponent, player) : 2.2 - setsWon;
   return 10 + gamesWon - gamesLost + 3 * (setsWon - setsLost) + 0.5 * (aceProjection(player) - dfProjection(player));
@@ -85,13 +93,14 @@ function projectCategory(player: PlayerSummary, categoryId: string, opponent?: P
       return { value: breakPointsWonProjection(player, opponent), note: "BPW uses break-point creation with opponent-strength adjustment." };
     case "total_games": {
       const playerGames = gamesWonProjection(player, opponent);
-      const opponentGames = opponent ? gamesWonProjection(opponent, player) : 10.9;
+      const oppFallback = isWTA(player) ? 10.3 : 10.9;
+      const opponentGames = opponent ? gamesWonProjection(opponent, player) : oppFallback;
       return { value: playerGames + opponentGames, note: "Total games combines both players' projected games won." };
     }
     case "games_won":
       return { value: gamesWonProjection(player, opponent), note: "Games won uses historical win rate adjusted by opponent strength." };
     case "games_lost":
-      return { value: opponent ? gamesWonProjection(opponent, player) : 10.9, note: "Games lost estimates the opponent's game-winning expectation." };
+      return { value: opponent ? gamesWonProjection(opponent, player) : (isWTA(player) ? 10.3 : 10.9), note: "Games lost estimates the opponent's game-winning expectation." };
     case "sets_won":
       return { value: setsWonProjection(player, opponent), note: "Sets won uses historical win rate adjusted by opponent strength." };
     case "sets_lost":

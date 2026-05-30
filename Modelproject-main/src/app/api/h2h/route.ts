@@ -48,13 +48,18 @@ export async function GET(request: NextRequest) {
     // h2h.json not yet generated — fall through to recentMatches
   }
 
+  function nameMatches(opponentField: string, targetName: string): boolean {
+    const oLow = opponentField.toLowerCase().trim();
+    const tLow = targetName.toLowerCase().trim();
+    if (oLow === tLow || oLow.includes(tLow) || tLow.includes(oLow)) return true;
+    const lastName = tLow.split(" ").at(-1) ?? "";
+    if (lastName.length < 4) return false;
+    return oLow.split(/\s+/).some((w) => w === lastName);
+  }
+
   // Fallback: derive from recentMatches
-  const p1Matches = (player1.recentMatches ?? []).filter((m) =>
-    m.opponent.toLowerCase().includes(player2.name.split(" ").at(-1)!.toLowerCase())
-  );
-  const p2Matches = (player2.recentMatches ?? []).filter((m) =>
-    m.opponent.toLowerCase().includes(player1.name.split(" ").at(-1)!.toLowerCase())
-  );
+  const p1Matches = (player1.recentMatches ?? []).filter((m) => nameMatches(m.opponent, player2.name));
+  const p2Matches = (player2.recentMatches ?? []).filter((m) => nameMatches(m.opponent, player1.name));
 
   const seen = new Set<string>();
   const meetings: H2HRecord["meetings"] = [];

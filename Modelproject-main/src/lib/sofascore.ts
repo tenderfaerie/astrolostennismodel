@@ -26,6 +26,25 @@ type SofaLiveResponse = {
   events?: SofaEvent[];
 };
 
+const TOURNAMENT_SURFACE_MAP: Record<string, LiveMatch["surface"]> = {
+  "french open": "Clay", "roland garros": "Clay", "madrid": "Clay",
+  "barcelona": "Clay", "monte carlo": "Clay", "monte-carlo": "Clay",
+  "rome": "Clay", "hamburg": "Clay", "munich": "Clay", "geneva": "Clay",
+  "lyon": "Clay", "estoril": "Clay", "bucharest": "Clay", "gstaad": "Clay",
+  "wimbledon": "Grass", "queens": "Grass", "halle": "Grass",
+  "eastbourne": "Grass", "nottingham": "Grass", "s-hertogenbosch": "Grass",
+  "us open": "Hard", "australian open": "Hard", "flushing": "Hard",
+  "masters": "Hard", "miami": "Hard", "indian wells": "Hard",
+  "cincinnati": "Hard", "toronto": "Hard", "montreal": "Hard",
+  "beijing": "Hard", "shanghai": "Hard", "dubai": "Hard", "doha": "Hard",
+  "abu dhabi": "Hard", "brisbane": "Hard", "sydney": "Hard",
+  "melbourne": "Hard", "washington": "Hard", "los angeles": "Hard",
+  "winston-salem": "Hard", "new york": "Hard",
+  "paris": "Indoor", "vienna": "Indoor", "basel": "Indoor",
+  "rotterdam": "Indoor", "marseille": "Indoor", "dallas": "Indoor",
+  "sofia": "Indoor", "stockholm": "Indoor", "moscow": "Indoor",
+};
+
 function normalizeSurface(value?: string): LiveMatch["surface"] {
   if (!value) return "Unknown";
   const lower = value.toLowerCase();
@@ -34,6 +53,9 @@ function normalizeSurface(value?: string): LiveMatch["surface"] {
   if (lower.includes("hard")) return "Hard";
   if (lower.includes("carpet")) return "Carpet";
   if (lower.includes("indoor")) return "Indoor";
+  for (const [name, surface] of Object.entries(TOURNAMENT_SURFACE_MAP)) {
+    if (lower.includes(name)) return surface;
+  }
   return "Unknown";
 }
 

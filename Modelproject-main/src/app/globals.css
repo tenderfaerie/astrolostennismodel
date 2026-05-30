@@ -628,6 +628,67 @@ a {
 .evCell span { font-size: 12px; }
 .evCell strong { font-size: 15px; }
 
+/* ── Parlay warning ── */
+.parlayWarning {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--gold);
+  background: rgba(247, 201, 72, 0.08);
+  border-bottom: 1px solid rgba(247, 201, 72, 0.18);
+}
+
+/* ── Low sample badge ── */
+.lowSampleBadge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: rgba(255, 107, 107, 0.18);
+  color: var(--red);
+  border: 1px solid rgba(255, 107, 107, 0.35);
+  vertical-align: middle;
+  cursor: default;
+}
+
+/* ── Stake calculator ── */
+.stakeCalc {
+  margin: 12px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.stakeCalcTitle {
+  font-size: 12px;
+  margin-bottom: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stakeCalcRow {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.stakeCalcRow label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 160px;
+}
+.stakeCalcRow label input,
+.stakeCalcRow label select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
 /* ── Parlay builder ── */
 .parlayBox {
   margin: 12px 16px;
