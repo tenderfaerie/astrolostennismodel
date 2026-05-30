@@ -82,7 +82,7 @@ export type PlayerSummary = {
   holdProxyPct: number | null;
   bpSavedPct: number | null;
   bpCreatedPerReturnGame: number | null;
-  surfaces: Record<string, { matches: number; wins: number; losses: number; winPct: number }>;
+  surfaces: Record<string, { matches: number; wins: number; losses: number; winPct: number; aceRate?: number | null; dfRate?: number | null; firstServePct?: number | null; firstServeWonPct?: number | null; }>;
   recentMatches: Array<{
     date: string;
     tournament: string;
@@ -105,4 +105,35 @@ export type PropProjection = {
   sampleSize: number;
   note: string;
   categoryId?: string;
+  surface?: string;
+  americanOdds?: number;
+  ev?: number;
+  kellyPct?: number;
+  impliedProb?: number;
+  modelProb?: number;
+};
+
+export type H2HRecord = {
+  player1Name: string;
+  player2Name: string;
+  player1Wins: number;
+  player2Wins: number;
+  totalMatches: number;
+  meetings: Array<{ date: string; tournament: string; surface: string; winner: string; score: string; }>;
+  bySurface: Record<string, { player1Wins: number; player2Wins: number }>;
+};
+
+export type BetRecord = {
+  id: string;
+  placedAt: string;
+  player: string;
+  opponent?: string;
+  market: string;
+  line: number;
+  side: "Over" | "Under";
+  americanOdds: number;
+  stake: number;
+  status: "open" | "won" | "lost" | "void";
+  projection?: number;
+  ev?: number;
 };

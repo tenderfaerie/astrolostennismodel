@@ -101,6 +101,22 @@ for (const [tour, file] of rankingFiles) {
 const tourPriority = { ATP: 0, WTA: 0, Challenger: 1, Futures: 2, "ITF Men": 3, "ITF Women": 3 };
 
 const players = new Map();
+const h2hMap = new Map();
+
+function h2hKey(id1, id2) {
+  return [String(id1), String(id2)].sort().join(":");
+}
+
+function recordH2H(winnerId, loserId, row) {
+  const key = h2hKey(winnerId, loserId);
+  if (!h2hMap.has(key)) {
+    const sorted = [String(winnerId), String(loserId)].sort();
+    h2hMap.set(key, { p1Id: sorted[0], p2Id: sorted[1], p1Wins: 0, p2Wins: 0, meetings: [] });
+  }
+  const rec = h2hMap.get(key);
+  if (String(winnerId) === rec.p1Id) rec.p1Wins++; else rec.p2Wins++;
+  rec.meetings.push({ date: row.tourney_date, tournament: row.tourney_name, surface: row.surface || "Unknown", winnerId: String(winnerId), score: row.score });
+}
 
 function ensurePlayer(tour, row, side) {
   const id = row[`${side}_id`];
@@ -145,12 +161,17 @@ function ensurePlayer(tour, row, side) {
   return players.get(key);
 }
 
-function addSurface(player, surface, won) {
+function addSurface(player, surface, won, row, side) {
   const key = surface || "Unknown";
-  player.surfaces[key] ??= { matches: 0, wins: 0, losses: 0, winPct: 0 };
-  player.surfaces[key].matches += 1;
-  if (won) player.surfaces[key].wins += 1;
-  else player.surfaces[key].losses += 1;
+  player.surfaces[key] ??= { matches: 0, wins: 0, losses: 0, winPct: 0, svpt: 0, aces: 0, dfs: 0, firstIn: 0, firstWon: 0 };
+  const s = player.surfaces[key];
+  s.matches += 1;
+  if (won) s.wins += 1; else s.losses += 1;
+  s.svpt += number(row[`${side}_svpt`]) ?? 0;
+  s.aces += number(row[`${side}_ace`]) ?? 0;
+  s.dfs += number(row[`${side}_df`]) ?? 0;
+  s.firstIn += number(row[`${side}_1stIn`]) ?? 0;
+  s.firstWon += number(row[`${side}_1stWon`]) ?? 0;
 }
 
 function addMatchStats(player, row, side, opponentName, won) {
@@ -166,7 +187,7 @@ function addMatchStats(player, row, side, opponentName, won) {
   player.serviceGames += number(row[`${side}_SvGms`]) ?? 0;
   player.bpSaved += number(row[`${side}_bpSaved`]) ?? 0;
   player.bpFaced += number(row[`${side}_bpFaced`]) ?? 0;
-  addSurface(player, row.surface, won);
+  addSurface(player, row.surface, won, row, side);
 
   player.recentMatches.push({
     date: row.tourney_date,
@@ -194,12 +215,17 @@ for (const [tour, file] of matchFiles) {
     winner.bpCreated += number(row.l_bpFaced) ?? 0;
     loser.returnGames += number(row.w_SvGms) ?? 0;
     loser.bpCreated += number(row.w_bpFaced) ?? 0;
+    recordH2H(row.winner_id, row.loser_id, row);
   }
 }
 
 const summaries = [...players.values()].map((player) => {
   for (const surface of Object.values(player.surfaces)) {
     surface.winPct = pct(surface.wins, surface.matches) ?? 0;
+    surface.aceRate = pct(surface.aces, surface.svpt);
+    surface.dfRate = pct(surface.dfs, surface.svpt);
+    surface.firstServePct = pct(surface.firstIn, surface.svpt);
+    surface.firstServeWonPct = pct(surface.firstWon, surface.firstIn);
   }
 
   player.recentMatches.sort((a, b) => b.date.localeCompare(a.date));
@@ -232,5 +258,9 @@ const summaries = [...players.values()].map((player) => {
 
 fs.mkdirSync(dataDir, { recursive: true });
 fs.writeFileSync(path.join(dataDir, "player-summaries.json"), JSON.stringify(summaries, null, 2));
+
+const h2hObj = Object.fromEntries(h2hMap.entries());
+fs.writeFileSync(path.join(dataDir, "h2h.json"), JSON.stringify(h2hObj));
+console.log(`Exported ${h2hMap.size} H2H records into data/h2h.json`);
 
 console.log(`Imported ${summaries.length} player summaries into data/player-summaries.json`);

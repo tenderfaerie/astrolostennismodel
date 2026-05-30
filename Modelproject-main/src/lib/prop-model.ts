@@ -148,3 +148,38 @@ export function projectProp(
     note: projected.note
   };
 }
+
+export function calcEV(confidence: number, americanOdds: number) {
+  const modelProb = confidence / 100;
+  const profitPerUnit = americanOdds > 0 ? americanOdds / 100 : 100 / Math.abs(americanOdds);
+  const impliedProb = americanOdds > 0 ? 100 / (americanOdds + 100) : Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
+  const ev = modelProb * profitPerUnit - (1 - modelProb);
+  const kelly = (modelProb * (profitPerUnit + 1) - 1) / profitPerUnit;
+  return {
+    ev: Number((ev * 100).toFixed(1)),
+    kellyPct: Number((Math.max(0, kelly) * 100).toFixed(1)),
+    impliedProb: Number((impliedProb * 100).toFixed(1)),
+    modelProb: Number((modelProb * 100).toFixed(1))
+  };
+}
+
+export function surfaceAdjustedPlayer(player: PlayerSummary, surface: string): PlayerSummary {
+  if (!surface || surface === "All" || !player.surfaces?.[surface]) return player;
+  const s = player.surfaces[surface];
+  return {
+    ...player,
+    winPct: s.winPct || player.winPct,
+    aceRate: s.aceRate ?? player.aceRate,
+    dfRate: s.dfRate ?? player.dfRate,
+    firstServePct: s.firstServePct ?? player.firstServePct,
+    firstServeWonPct: s.firstServeWonPct ?? player.firstServeWonPct,
+  };
+}
+
+export function formAdjustedPlayer(player: PlayerSummary): PlayerSummary {
+  const recent = player.recentMatches?.slice(0, 10) ?? [];
+  if (recent.length < 5) return player;
+  const formWinPct = recent.filter((m) => m.result === "W").length / recent.length;
+  // Blend 55% career + 45% recent form
+  return { ...player, winPct: player.winPct * 0.55 + formWinPct * 0.45 };
+}
