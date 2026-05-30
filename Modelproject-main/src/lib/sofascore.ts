@@ -150,14 +150,17 @@ export async function getSofaScoreUpcomingTennis(): Promise<LiveMatch[]> {
   return all;
 }
 
-export async function getSofaScoreFinishedTennis(): Promise<LiveMatch[]> {
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const dates = [yesterday, today].map((d) => d.toISOString().slice(0, 10));
+export async function getSofaScoreFinishedTennis(daysBack = 14): Promise<LiveMatch[]> {
+  const dates: string[] = [];
+  for (let i = daysBack; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
 
   const all: LiveMatch[] = [];
-  for (const date of dates) {
+  // Fetch in parallel — SofaScore handles concurrent requests fine
+  await Promise.all(dates.map(async (date) => {
     try {
       const data = await fetchJson<SofaLiveResponse>(`${BASE_URL}/sport/tennis/scheduled-events/${date}`);
       const events = (data.events ?? []).filter((e) => e.status?.type === "finished");
@@ -165,7 +168,10 @@ export async function getSofaScoreFinishedTennis(): Promise<LiveMatch[]> {
     } catch {
       // skip dates that fail
     }
-  }
+  }));
+
+  // Sort newest first
+  all.sort((a, b) => (b.startTimestamp ?? 0) - (a.startTimestamp ?? 0));
   return all;
 }
 

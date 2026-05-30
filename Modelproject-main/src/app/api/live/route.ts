@@ -41,9 +41,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (type === "finished") {
+    const daysBackParam = request.nextUrl.searchParams.get("daysBack");
+    const daysBack = daysBackParam ? Math.min(Math.max(Number(daysBackParam) || 14, 1), 30) : 14;
     try {
-      const matches = await getSofaScoreFinishedTennis();
-      return NextResponse.json({ provider: "sofascore", transport: "fetch", matches });
+      const matches = await getSofaScoreFinishedTennis(daysBack);
+      return NextResponse.json({ provider: "sofascore", transport: "fetch", matches, daysBack });
     } catch (error) {
       return NextResponse.json({
         provider: "sofascore",

@@ -601,6 +601,7 @@ export default function Home() {
   const [liveMatches, setLiveMatches] = useState<LiveMatch[]>([]);
   const [upcomingMatches, setUpcomingMatches] = useState<LiveMatch[]>([]);
   const [finishedMatches, setFinishedMatches] = useState<LiveMatch[]>([]);
+  const [finishedDaysBack, setFinishedDaysBack] = useState(14);
   const [liveWarning, setLiveWarning] = useState("");
   const [upcomingWarning, setUpcomingWarning] = useState("");
   const [finishedWarning, setFinishedWarning] = useState("");
@@ -660,8 +661,8 @@ export default function Home() {
 
   useEffect(() => {
     if (activeTab !== "finished") return;
-    fetch("/api/live?type=finished", { cache: "no-store" }).then((r) => r.json()).then((d) => { setFinishedMatches(d.matches ?? []); setFinishedWarning(d.warning ?? ""); }).catch(() => {});
-  }, [activeTab]);
+    fetch(`/api/live?type=finished&daysBack=${finishedDaysBack}`, { cache: "no-store" }).then((r) => r.json()).then((d) => { setFinishedMatches(d.matches ?? []); setFinishedWarning(d.warning ?? ""); }).catch(() => {});
+  }, [activeTab, finishedDaysBack]);
 
   useEffect(() => {
     fetch(`/api/players?q=${encodeURIComponent(query)}`).then((r) => r.json()).then((d) => setPlayers(d.players ?? [])).catch(() => {});
@@ -795,8 +796,14 @@ export default function Home() {
           {activeTab === "finished" ? (
             <section className="section fullWidth">
               <div className="sectionHeader">
-                <h2><CheckCircle size={16} /> Finished — Yesterday &amp; Today</h2>
-                <span className="pill">{finishedMatches.length} results</span>
+                <h2><CheckCircle size={16} /> Finished Results</h2>
+                <span className="pill">{finishedMatches.length} results · last {finishedDaysBack}d</span>
+              </div>
+              <div className="filterRow">
+                <span className="muted" style={{ fontSize: 12, marginRight: 4 }}>Show last:</span>
+                {[3, 7, 14, 21, 30].map((d) => (
+                  <button key={d} className={finishedDaysBack === d ? "filterPill active" : "filterPill"} onClick={() => setFinishedDaysBack(d)}>{d}d</button>
+                ))}
               </div>
               <MatchList matches={finishedMatches} emptyMessage="No finished matches loaded" tourFilter={matchTourFilter} warning={finishedWarning || undefined} />
             </section>
