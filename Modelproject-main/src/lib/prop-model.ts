@@ -1,0 +1,280 @@
+import { PlayerSummary, PropProjection } from "./types";
+
+export type PropCategory = {
+  id: string;
+  label: string;
+  aliases: string[];
+};
+
+export const propCategories: PropCategory[] = [
+  { id: "fantasy_score", label: "Fantasy Score", aliases: ["fantasy", "fs", "fantasy points", "score"] },
+  { id: "aces", label: "Aces", aliases: ["ace"] },
+  { id: "double_faults", label: "Double Faults", aliases: ["df", "dfs", "double fault"] },
+  { id: "bpw", label: "Break Points Won", aliases: ["bpw", "break points", "break points won", "breaks"] },
+  { id: "total_games", label: "Total Games", aliases: ["games", "match games", "total games played"] },
+  { id: "games_won", label: "Total Games Won", aliases: ["games won", "total games won", "player games won"] },
+  { id: "games_lost", label: "Games Lost", aliases: ["total games lost", "player games lost"] },
+  { id: "sets_won", label: "Sets Won", aliases: ["set wins", "total sets won"] },
+  { id: "sets_lost", label: "Sets Lost", aliases: ["set losses", "total sets lost"] },
+  { id: "tiebreaks", label: "Tiebreaks", aliases: ["tb", "tie breaks", "tiebreak"] },
+  { id: "service_games_won", label: "Service Games Won", aliases: ["service games", "service games won", "sgw"] },
+  { id: "return_games_won", label: "Return Games Won", aliases: ["return games", "return games won", "rgw"] },
+  { id: "total_points_won", label: "Total Points Won", aliases: ["points won", "total points", "tpw"] },
+  { id: "winners", label: "Winners", aliases: ["winner", "total winners"] },
+  { id: "unforced_errors", label: "Unforced Errors", aliases: ["errors", "ufe", "unforced error"] }
+];
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function normalize(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
+}
+
+function categoryFor(market: string) {
+  const normalized = normalize(market);
+  return propCategories.find((category) =>
+    category.id === market ||
+    normalize(category.label) === normalized ||
+    category.aliases.some((alias) => normalize(alias) === normalized || normalized.includes(normalize(alias)))
+  ) ?? propCategories[0];
+}
+
+function isWTA(player: PlayerSummary): boolean {
+  return player.tour === "WTA" || player.tour === "ITF Women";
+}
+
+function aceProjection(player: PlayerSummary) {
+  const base = isWTA(player) ? 10.8 : 12.2;
+  const serviceGames = base + (player.winPct - 0.5) * (isWTA(player) ? 2.0 : 2.4);
+  return (player.aceRate ?? (isWTA(player) ? 0.038 : 0.065)) * serviceGames * 6.1;
+}
+
+function dfProjection(player: PlayerSummary) {
+  const base = isWTA(player) ? 10.8 : 12.2;
+  const serviceGames = base + (player.winPct - 0.5) * (isWTA(player) ? 2.0 : 2.4);
+  return (player.dfRate ?? (isWTA(player) ? 0.042 : 0.035)) * serviceGames * 6.1;
+}
+
+function gamesWonProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const base = isWTA(player) ? 10.2 : 11.8;
+  const opponentResistance = opponent ? (opponent.winPct - 0.5) * 2.8 : 0;
+  return base + (player.winPct - 0.5) * 7.5 - opponentResistance;
+}
+
+function setsWonProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const opponentResistance = opponent ? (opponent.winPct - 0.5) * 0.55 : 0;
+  return clamp(1 + (player.winPct - 0.5) * 1.4 - opponentResistance, 0.15, 2.7);
+}
+
+function breakPointsWonProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const base = (player.bpCreatedPerReturnGame ?? 0.48) * 10.8;
+  const opponentBoost = opponent ? (0.55 - opponent.winPct) * 1.6 : 0;
+  return clamp(base + opponentBoost, 0.4, 8.5);
+}
+
+function fantasyProjection(player: PlayerSummary, opponent?: PlayerSummary | null) {
+  const totalBase = isWTA(player) ? 20.5 : 21.8;
+  const gamesWon = gamesWonProjection(player, opponent);
+  const gamesLost = opponent ? gamesWonProjection(opponent, player) : totalBase - gamesWon;
+  const setsWon = setsWonProjection(player, opponent);
+  const setsLost = opponent ? setsWonProjection(opponent, player) : 2.2 - setsWon;
+  return 10 + gamesWon - gamesLost + 3 * (setsWon - setsLost) + 0.5 * (aceProjection(player) - dfProjection(player));
+}
+
+function projectCategory(player: PlayerSummary, categoryId: string, opponent?: PlayerSummary | null) {
+  switch (categoryId) {
+    case "aces":
+      return { value: aceProjection(player), note: "Aces use player ace rate with adjusted service-game expectation." };
+    case "double_faults":
+      return { value: dfProjection(player), note: "Double faults use player DF rate over projected service points." };
+    case "bpw":
+      return { value: breakPointsWonProjection(player, opponent), note: "BPW uses break-point creation with opponent-strength adjustment." };
+    case "total_games": {
+      const playerGames = gamesWonProjection(player, opponent);
+      const oppFallback = isWTA(player) ? 10.3 : 10.9;
+      const opponentGames = opponent ? gamesWonProjection(opponent, player) : oppFallback;
+      return { value: playerGames + opponentGames, note: "Total games combines both players' projected games won." };
+    }
+    case "games_won":
+      return { value: gamesWonProjection(player, opponent), note: "Games won uses historical win rate adjusted by opponent strength." };
+    case "games_lost":
+      return { value: opponent ? gamesWonProjection(opponent, player) : (isWTA(player) ? 10.3 : 10.9), note: "Games lost estimates the opponent's game-winning expectation." };
+    case "sets_won":
+      return { value: setsWonProjection(player, opponent), note: "Sets won uses historical win rate adjusted by opponent strength." };
+    case "sets_lost":
+      return { value: opponent ? setsWonProjection(opponent, player) : 1.1, note: "Sets lost estimates the opponent's set-winning expectation." };
+    case "tiebreaks": {
+      const totalGames = gamesWonProjection(player, opponent) + (opponent ? gamesWonProjection(opponent, player) : 10.9);
+      const closeness = opponent ? 1 - Math.min(0.5, Math.abs(player.winPct - opponent.winPct)) : 0.75;
+      return { value: clamp((totalGames - 20) * 0.08 * closeness, 0.05, 1.8), note: "Tiebreaks are estimated from projected match length and matchup closeness." };
+    }
+    case "service_games_won":
+      return { value: clamp(gamesWonProjection(player, opponent) * 0.54 + aceProjection(player) * 0.05 - dfProjection(player) * 0.03, 0, 16), note: "Service games won are estimated from games won plus serve quality." };
+    case "return_games_won":
+      return { value: clamp(gamesWonProjection(player, opponent) * 0.46 - aceProjection(player) * 0.02, 0, 12), note: "Return games won are estimated as the return share of projected games won." };
+    case "total_points_won":
+      return { value: gamesWonProjection(player, opponent) * 4.25 + setsWonProjection(player, opponent) * 2.5, note: "Total points won are estimated from game volume and set share." };
+    case "winners":
+      return { value: clamp(10 + aceProjection(player) * 1.35 + gamesWonProjection(player, opponent) * 0.75, 5, 55), note: "Winners are estimated from ace production and offensive game volume." };
+    case "unforced_errors":
+      return { value: clamp(8 + dfProjection(player) * 1.55 + (opponent ? gamesWonProjection(opponent, player) : 10.9) * 0.65, 4, 55), note: "Unforced errors are estimated from double faults and defensive pressure." };
+    case "fantasy_score":
+    default:
+      return { value: fantasyProjection(player, opponent), note: "Fantasy score uses match played, games, sets, aces, and double faults." };
+  }
+}
+
+function detectBait(
+  player: PlayerSummary,
+  categoryId: string,
+  line: number,
+  projection: number,
+  side: "Over" | "Under" | "Pass",
+  opponent?: PlayerSummary | null
+): { baitFlag: "bait" | "caution" | null; baitReasons: string[] } {
+  const reasons: string[] = [];
+  let score = 0;
+  const wta = isWTA(player);
+
+  const wr = player.winPct;
+  const owr = opponent?.winPct ?? 0.5;
+
+  if (categoryId === "fantasy_score" || categoryId === "total_games" || categoryId === "games_won") {
+    // Compute outcome-range bounds
+    const acePm = aceProjection(player);
+    const dfPm  = dfProjection(player);
+
+    let floor: number, ceil: number;
+    if (categoryId === "fantasy_score") {
+      // Floor = straight-set loss, Ceil = dominant straight-set win
+      if (wta) {
+        floor = 10 + 5 - 12 + 3*0 - 3*2 + 0.5*acePm - 0.5*dfPm;
+        ceil  = 10 + 15 - 8  + 3*2 - 3*0 + 0.5*acePm - 0.5*dfPm;
+      } else {
+        floor = 10 + 10 - 20 + 3*0 - 3*3 + 0.5*acePm - 0.5*dfPm;
+        ceil  = 10 + 22 - 10 + 3*3 - 3*0 + 0.5*acePm - 0.5*dfPm;
+      }
+      if (side === "Over" && line >= ceil * 0.88) {
+        score += 2;
+        reasons.push(`Line ${line} is near the realistic ceiling (~${ceil.toFixed(1)}) — requires near-perfect result to cash`);
+      }
+      if (side === "Under" && line <= floor * 1.12 && floor > 0) {
+        score += 2;
+        reasons.push(`Line ${line} near the realistic floor (~${floor.toFixed(1)}) — requires a catastrophic loss to cash`);
+      }
+    }
+
+    if (categoryId === "games_won") {
+      floor = wta ? 5 : 10;
+      ceil  = wta ? 16 : 22;
+      if (side === "Over" && line >= ceil * 0.9) {
+        score += 2;
+        reasons.push(`Games Won line ${line} near max possible (${ceil}) — requires dominant win to clear`);
+      }
+    }
+
+    if (categoryId === "total_games") {
+      floor = wta ? 14 : 28;
+      ceil  = wta ? 28 : 50;
+      if (side === "Under" && line <= floor * 1.1) {
+        score += 2;
+        reasons.push(`Total Games UNDER ${line} near minimum possible (${floor}) — match would have to end in a bagel`);
+      }
+    }
+  }
+
+  // Heavy underdog on a high OVER line
+  if (owr - wr > 0.18 && side === "Over" && projection < line) {
+    score += 1;
+    reasons.push(`Player is a heavy underdog (WR ${(wr*100).toFixed(0)}% vs opp ${(owr*100).toFixed(0)}%) — likely losing scenario suppresses stat`);
+  }
+
+  // Line is on the wrong side of projection but only just barely
+  if ((side === "Over" && line > projection) || (side === "Under" && line < projection)) {
+    score += 1;
+    reasons.push(`Line (${line}) is on the unprofitable side of projection (${projection}) — model says fade`);
+  }
+
+  // Sample size warning compounds bait risk
+  if (player.matches < 15 && score > 0) {
+    score += 1;
+    reasons.push(`Low sample size (${player.matches} matches) — projection is less reliable`);
+  }
+
+  const baitFlag: "bait" | "caution" | null =
+    score >= 3 ? "bait" : score >= 1 ? "caution" : null;
+  return { baitFlag, baitReasons: reasons };
+}
+
+export function projectProp(
+  player: PlayerSummary,
+  market: string,
+  line: number,
+  requestedSide?: "Over" | "Under",
+  opponent?: PlayerSummary | null
+): PropProjection {
+  const category = categoryFor(market);
+  const projected = projectCategory(player, category.id, opponent);
+  const projection = Number(projected.value.toFixed(2));
+  const rawEdge = projection - line;
+  const side: "Over" | "Under" | "Pass" = requestedSide ?? (rawEdge >= 0.5 ? "Over" : rawEdge <= -0.5 ? "Under" : "Pass");
+  const edge = side === "Under" ? line - projection : rawEdge;
+  const stability = clamp(Math.sqrt(player.matches) / 12, 0.1, 1);
+  const distance = clamp(Math.abs(rawEdge) / Math.max(1, Math.abs(line)), 0, 0.35);
+  const confidence = Math.round(clamp(50 + distance * 95 + stability * 16, 1, 92));
+
+  const { baitFlag, baitReasons } = detectBait(player, category.id, line, projection, side, opponent);
+
+  return {
+    player: player.name,
+    opponent: opponent?.name,
+    market: category.label,
+    categoryId: category.id,
+    side,
+    line,
+    projection,
+    edge: Number(edge.toFixed(2)),
+    confidence,
+    sampleSize: player.matches,
+    note: projected.note,
+    baitFlag,
+    baitReasons
+  };
+}
+
+export function calcEV(confidence: number, americanOdds: number) {
+  const modelProb = confidence / 100;
+  const profitPerUnit = americanOdds > 0 ? americanOdds / 100 : 100 / Math.abs(americanOdds);
+  const impliedProb = americanOdds > 0 ? 100 / (americanOdds + 100) : Math.abs(americanOdds) / (Math.abs(americanOdds) + 100);
+  const ev = modelProb * profitPerUnit - (1 - modelProb);
+  const kelly = (modelProb * (profitPerUnit + 1) - 1) / profitPerUnit;
+  return {
+    ev: Number((ev * 100).toFixed(1)),
+    kellyPct: Number((Math.max(0, kelly) * 100).toFixed(1)),
+    impliedProb: Number((impliedProb * 100).toFixed(1)),
+    modelProb: Number((modelProb * 100).toFixed(1))
+  };
+}
+
+export function surfaceAdjustedPlayer(player: PlayerSummary, surface: string): PlayerSummary {
+  if (!surface || surface === "All" || !player.surfaces?.[surface]) return player;
+  const s = player.surfaces[surface];
+  return {
+    ...player,
+    winPct: s.winPct || player.winPct,
+    aceRate: s.aceRate ?? player.aceRate,
+    dfRate: s.dfRate ?? player.dfRate,
+    firstServePct: s.firstServePct ?? player.firstServePct,
+    firstServeWonPct: s.firstServeWonPct ?? player.firstServeWonPct,
+  };
+}
+
+export function formAdjustedPlayer(player: PlayerSummary): PlayerSummary {
+  const recent = player.recentMatches?.slice(0, 10) ?? [];
+  if (recent.length < 5) return player;
+  const formWinPct = recent.filter((m) => m.result === "W").length / recent.length;
+  // Blend 55% career + 45% recent form
+  return { ...player, winPct: player.winPct * 0.55 + formWinPct * 0.45 };
+}
