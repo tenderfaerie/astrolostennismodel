@@ -38,7 +38,6 @@ from pathlib import Path
 
 BASE = "https://www.tennislive.net"
 DATA = Path(__file__).parent.parent / "data" / "tennislive"
-CHROME = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 RATE_LIMIT = 1.5   # seconds between requests
 MAX_RETRIES = 3
 
@@ -78,6 +77,7 @@ TOUR_PATTERNS = {
 }
 
 _tls_session = None
+_playwright_html_cache: dict[str, str] = {}
 
 def get_session():
     global _tls_session
@@ -90,22 +90,57 @@ def get_session():
         _tls_session.cookies.update({"vis_co": "EN"})
     return _tls_session
 
+def fetch_playwright_sync(url: str) -> str:
+    """Fetch using a real Playwright browser — bypasses Cloudflare JS challenges."""
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        ctx = browser.new_context(
+            user_agent=HEADERS["user-agent"],
+            locale="en-US",
+            extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
+        )
+        page = ctx.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # Wait for actual content — Cloudflare challenge pages don't have <table>
+            try:
+                page.wait_for_selector("table, div.player_stats, div.player_info", timeout=10000)
+            except Exception:
+                pass
+            html = page.content()
+        finally:
+            browser.close()
+    return html
+
 def fetch(url: str, retries: int = MAX_RETRIES) -> str:
+    time.sleep(RATE_LIMIT)
+    # Try tls_client first (faster, no browser overhead)
     for attempt in range(retries):
         try:
-            time.sleep(RATE_LIMIT)
             resp = get_session().get(url, headers=HEADERS, timeout_seconds=25)
-            if resp.status_code == 200:
-                return resp.text
-            if resp.status_code == 403:
-                print(f"  [403] Cloudflare block on {url}", file=sys.stderr)
-                return ""
             if resp.status_code == 404:
                 return ""
+            if resp.status_code == 200:
+                html = resp.text
+                # Cloudflare challenge pages are small and contain "challenge"
+                if len(html) > 5000 and "challenge" not in html[:500].lower():
+                    return html
+                # Looks like a challenge page — fall through to Playwright
+                print(f"  [CF challenge] falling back to Playwright for {url}")
+                break
             print(f"  [HTTP {resp.status_code}] {url} attempt {attempt+1}", file=sys.stderr)
         except Exception as e:
-            print(f"  [ERR] {url} attempt {attempt+1}: {e}", file=sys.stderr)
-            time.sleep(2 ** attempt)
+            print(f"  [tls_client ERR] {url}: {e}", file=sys.stderr)
+            break
+
+    # Playwright fallback — real browser, handles Cloudflare
+    for attempt in range(2):
+        try:
+            return fetch_playwright_sync(url)
+        except Exception as e:
+            print(f"  [Playwright ERR] {url} attempt {attempt+1}: {e}", file=sys.stderr)
+            time.sleep(3)
     return ""
 
 def strip_tags(html: str) -> str:
@@ -515,7 +550,6 @@ async def scrape_scores_async(mode: str) -> list[dict]:
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            executable_path=CHROME,
             args=["--no-sandbox", "--ignore-certificate-errors",
                   "--disable-blink-features=AutomationControlled"]
         )
