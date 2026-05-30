@@ -7,7 +7,7 @@ import { propCategories } from "@/lib/prop-model";
 
 type Tab = "live" | "upcoming" | "finished" | "props" | "players" | "tracker";
 const SURFACES = ["All", "Hard", "Clay", "Grass", "Indoor"];
-const TOUR_LABELS: Tour[] = ["ATP", "WTA", "ITF Men", "ITF Women", "Challenger", "Futures"];
+const TOUR_LABELS: Tour[] = ["ATP", "WTA", "ITF Women", "Challenger", "Futures"];
 
 // ─── Formatters ──────────────────────────────────────────────────────────────
 

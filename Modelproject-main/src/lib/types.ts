@@ -1,4 +1,4 @@
-export type Tour = "ATP" | "WTA" | "Challenger" | "ITF Men" | "ITF Women" | "Futures";
+export type Tour = "ATP" | "WTA" | "Challenger" | "ITF Women" | "Futures";
 
 export type Surface = "Hard" | "Clay" | "Grass" | "Carpet" | "Indoor" | "Unknown";
 
