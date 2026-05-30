@@ -204,10 +204,9 @@ def scrape_rankings(tour: str) -> list[dict]:
         )
         ctx = browser.new_context(user_agent=HEADERS["user-agent"], locale="en-US")
         page = ctx.new_page()
-        page.goto(url, wait_until="networkidle", timeout=30000)
+        page.goto(url, wait_until="load", timeout=30000)
         try:
-            # Wait for actual ranking rows — class pair/unpair
-            page.wait_for_selector("tr.pair, tr.unpair", timeout=8000)
+            page.wait_for_selector("tr.pair, tr.unpair", timeout=10000)
         except PlaywrightTimeout:
             print("  [rankings] timed out waiting for tr.pair/tr.unpair")
         html = page.content()
