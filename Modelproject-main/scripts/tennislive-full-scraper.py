@@ -612,13 +612,12 @@ TAB_TEXT = {"live": "live tennis", "upcoming": "scheduled", "finished": "finishe
 _WEEKDAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 def _extract_player_links(row_html: str) -> list[tuple[str, str]]:
-    """Return [(slug, display_name), ...] for /atp/ or /wta/ player profile links.
-    Excludes the H2H link which points to /atp/h2h/ or similar."""
+    """Return [(slug, display_name), ...] for ATP/WTA player profile links.
+    Handles both relative (/atp/slug/) and absolute (https://...tennislive.net/atp/slug/) hrefs."""
     found = re.findall(
-        r'href="/(?:atp|wta)/([^/"]+)/"[^>]*>\s*([^<]{2,40})\s*</a>',
+        r'href="(?:https?://[^/"]*)?/(?:atp|wta)/([^/"]+)/"[^>]*>\s*([^<]{2,40})\s*</a>',
         row_html, re.IGNORECASE
     )
-    # Filter out non-player links (H2H pages, flag images, etc.)
     return [(slug, name.strip()) for slug, name in found
             if "h2h" not in slug.lower() and name.strip()
             and not re.match(r"^\d+$", name.strip())]
@@ -703,7 +702,9 @@ async def scrape_scores_async(mode: str) -> list[dict]:
             # Player links look like /atp/cerundolo/ or /wta/keys/
             player_links = _extract_player_links(row_html)
             if len(player_links) < 2:
-                # Not a match row (no two recognisable player links)
+                # Debug: show rows that had some links but not enough
+                if player_links:
+                    print(f"  [skip row] only {len(player_links)} link: {player_links} | texts={texts[:4]}")
                 continue
 
             home_slug, home_name = player_links[0]
