@@ -639,15 +639,45 @@ async def scrape_scores_async(mode: str) -> list[dict]:
             pass
 
         target = TAB_TEXT.get(mode, "live tennis")
-        for el in await page.query_selector_all("a, li, div"):
-            try:
-                txt = (await el.inner_text()).strip().lower()
-                if txt == target:
-                    await el.click()
-                    await asyncio.sleep(1.5)
-                    break
-            except Exception:
-                continue
+        if mode != "live":  # live is the default tab — no click needed
+            clicked = False
+            # Try exact Playwright text locator first (fastest, most reliable)
+            for selector in [
+                f"a:has-text('{target}')",
+                f"li:has-text('{target}')",
+                f"div:has-text('{target}')",
+            ]:
+                try:
+                    loc = page.locator(selector).first
+                    if await loc.is_visible(timeout=2000):
+                        await loc.click()
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+
+            # Fallback: iterate all clickable elements
+            if not clicked:
+                for el in await page.query_selector_all("a, li, div, span, button"):
+                    try:
+                        txt = (await el.inner_text()).strip().lower()
+                        if txt == target:
+                            await el.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+
+            if clicked:
+                # Wait for the table to repopulate with new content
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    await asyncio.sleep(3)
+                # Extra buffer for dynamic rows
+                await asyncio.sleep(1)
+            else:
+                print(f"[WARN] Could not find tab: {target!r}")
 
         fetched_at = datetime.now(timezone.utc).isoformat()
         current_tournament = "Unknown"
@@ -656,6 +686,16 @@ async def scrape_scores_async(mode: str) -> list[dict]:
         status_type = "inprogress" if mode == "live" else (
             "notstarted" if mode == "upcoming" else "finished")
         status_label = "Live" if mode == "live" else ("Scheduled" if mode == "upcoming" else "Finished")
+
+        # ── Scroll to load all lazy-rendered rows ────────────────────────────
+        prev_count = 0
+        for _ in range(10):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.8)
+            count = await page.evaluate("document.querySelectorAll('table tr').length")
+            if count == prev_count:
+                break
+            prev_count = count
 
         # ── Collect all rows first ────────────────────────────────────────────
         # Each match is TWO consecutive rows: row1=home player (has time), row2=away player
