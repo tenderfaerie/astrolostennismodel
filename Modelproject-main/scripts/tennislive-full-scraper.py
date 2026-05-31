@@ -649,7 +649,6 @@ async def scrape_scores_async(mode: str) -> list[dict]:
             except Exception:
                 continue
 
-        matches = []
         fetched_at = datetime.now(timezone.utc).isoformat()
         current_tournament = "Unknown"
         current_surface = "Unknown"
@@ -658,103 +657,128 @@ async def scrape_scores_async(mode: str) -> list[dict]:
             "notstarted" if mode == "upcoming" else "finished")
         status_label = "Live" if mode == "live" else ("Scheduled" if mode == "upcoming" else "Finished")
 
+        # ── Collect all rows first ────────────────────────────────────────────
+        # Each match is TWO consecutive rows: row1=home player (has time), row2=away player
+        raw_rows = []
         for row in await page.query_selector_all("table tr"):
             cells = await row.query_selector_all("td, th")
             texts = [(await c.inner_text()).strip() for c in cells]
             row_html = await row.inner_html()
+            raw_rows.append((texts, row_html))
 
+        # ── Process rows ──────────────────────────────────────────────────────
+        matches = []
+        pending_home: dict | None = None   # home-player row waiting for away row
+
+        def row_scores(texts: list[str]) -> list[int]:
+            """Extract set-score integers (0-7) from a row's cell texts."""
+            nums = []
+            for t in texts:
+                # Skip the player name cell and time cell (they contain letters)
+                if not re.match(r"^\d{1,2}$", t):
+                    continue
+                v = int(t)
+                if v <= 7:
+                    nums.append(v)
+            return nums
+
+        for texts, row_html in raw_rows:
             if not any(texts):
                 continue
 
-            # ── Calendar navigation rows ─────────────────────────────────────
-            # These contain day-of-week abbreviations like "Mon", "Tue", etc.
+            # Calendar rows (Mon/Tue/…)
             if any(t.lower() in _WEEKDAYS for t in texts):
+                pending_home = None
                 continue
 
-            # ── Column-header / tournament sub-header rows ───────────────────
-            # These look like: ["Paris", "1", "2", "3", "4", "5", "sets", "H2H"]
-            # The presence of the literal text "sets" (case-insensitive) marks this.
+            # Column-header rows — contain literal "sets"
             lower_texts = [t.lower() for t in texts]
             if "sets" in lower_texts:
-                # Extract tournament name: first non-empty, non-digit, non-keyword text
                 skip_words = {"sets", "h2h", "1", "2", "3", "4", "5", "s1", "s2", "s3", "s4", "s5"}
-                t_name = next(
-                    (t for t in texts if t and t.lower() not in skip_words
-                     and not re.match(r"^\d+$", t)),
-                    None
-                )
+                t_name = next((t for t in texts if t and t.lower() not in skip_words
+                               and not re.match(r"^\d+$", t)), None)
                 if t_name:
                     current_tournament = t_name
                     current_surface = infer_surface(t_name)
                     current_tour = infer_tour(t_name)
+                pending_home = None
                 continue
 
-            # ── Single-cell / very short rows — big tournament section headers ─
-            if len(cells) <= 2:
+            # Very short rows — tournament section headers
+            if len(texts) <= 2:
                 full = " ".join(t for t in texts if t).strip()
                 if full and not any(c.isdigit() for c in full[:3]):
                     current_tournament = full
                     current_surface = infer_surface(full)
                     current_tour = infer_tour(full)
+                pending_home = None
                 continue
 
-            # ── Extract player names from anchor href links ───────────────────
-            # Player links look like /atp/cerundolo/ or /wta/keys/
+            # Extract single player link from this row
             player_links = _extract_player_links(row_html)
-            if len(player_links) < 2:
-                # Debug: show rows that had some links but not enough
-                if player_links:
-                    print(f"  [skip row] only {len(player_links)} link: {player_links} | texts={texts[:4]}")
+            if not player_links:
+                pending_home = None
                 continue
 
-            home_slug, home_name = player_links[0]
-            away_slug, away_name = player_links[1]
+            slug, name = player_links[0]
+            # Strip seeding bracket: "Jakub Mensik [26]" → "Jakub Mensik"
+            name = re.sub(r"\s*\[\d+\]$", "", name).strip()
 
-            # ── Scores ───────────────────────────────────────────────────────
-            # Single-digit cells (≤ 7) are set/game scores. Typical layout:
-            #   time | player | s1_home | s2_home | s3_home | s1_away | s2_away | s3_away | H2H
-            # The scores split at the midpoint: first half = home, second half = away.
-            nums = [int(t) for t in texts if re.match(r"^\d{1,2}$", t) and int(t) <= 99]
-            # Only consider scores ≤ 7 (set/tiebreak-like values)
-            set_nums = [n for n in nums if n <= 7]
-            mid = len(set_nums) // 2
-            period_scores = []
-            for i in range(min(mid, 5)):
-                period_scores.append({
-                    "period": f"S{i+1}",
-                    "home": set_nums[i],
-                    "away": set_nums[mid + i],
+            # Time in texts[0] → this is the HOME player row
+            has_time = bool(re.search(r"\d{1,2}:\d{2}", texts[0]))
+
+            if has_time:
+                # Start of a new match
+                time_str = re.search(r"\d{1,2}:\d{2}", texts[0]).group(0)
+                round_parts = texts[0].split("\n")
+                round_info = " ".join(p.strip() for p in round_parts[1:] if p.strip())
+                pending_home = {
+                    "slug": slug, "name": name,
+                    "scores": row_scores(texts),
+                    "time": time_str, "round": round_info,
+                    "tournament": current_tournament,
+                    "surface": current_surface,
+                    "tour": current_tour,
+                }
+            elif pending_home is not None:
+                # Away player row — pair with pending home
+                away_scores = row_scores(texts)
+                home_scores = pending_home["scores"]
+
+                n_sets = min(len(home_scores), len(away_scores), 5)
+                period_scores = [
+                    {"period": f"S{i+1}", "home": home_scores[i], "away": away_scores[i]}
+                    for i in range(n_sets)
+                ]
+                # Sets won = count of sets where this player won more games
+                home_sets = sum(1 for i in range(n_sets) if home_scores[i] > away_scores[i])
+                away_sets = sum(1 for i in range(n_sets) if away_scores[i] > home_scores[i])
+
+                matches.append({
+                    "provider": "tennislive",
+                    "providerId": f"tl-{len(matches)+1}",
+                    "tournament": pending_home["tournament"],
+                    "category": pending_home["tour"],
+                    "surface": pending_home["surface"],
+                    "status": status_label,
+                    "statusType": status_type,
+                    "startTime": pending_home["time"],
+                    "round": pending_home["round"] or None,
+                    "homePlayer": pending_home["name"],
+                    "homeSlug": pending_home["slug"],
+                    "awayPlayer": name,
+                    "awaySlug": slug,
+                    "homeSetsWon": home_sets,
+                    "awaySetsWon": away_sets,
+                    "homeScore": home_scores[0] if home_scores else None,
+                    "awayScore": away_scores[0] if away_scores else None,
+                    "periodScores": period_scores,
+                    "fetchedAt": fetched_at,
                 })
-
-            time_str = next((t for t in texts if re.match(r"^\d{1,2}:\d{2}", t)), None)
-            # Clean up time (may have round info appended after newline)
-            if time_str and "\n" in time_str:
-                time_str = time_str.split("\n")[0].strip()
-
-            # Round info may appear in texts[0] after the time
-            round_info = ""
-            if texts[0] and "\n" in texts[0]:
-                round_info = texts[0].split("\n", 1)[1].strip()
-
-            matches.append({
-                "provider": "tennislive",
-                "providerId": f"tl-{len(matches)+1}",
-                "tournament": current_tournament,
-                "category": current_tour,
-                "surface": current_surface,
-                "status": status_label,
-                "statusType": status_type,
-                "startTime": time_str,
-                "round": round_info or None,
-                "homePlayer": home_name,
-                "homeSlug": home_slug,
-                "awayPlayer": away_name,
-                "awaySlug": away_slug,
-                "homeScore": set_nums[0] if set_nums else None,
-                "awayScore": set_nums[mid] if mid > 0 else None,
-                "periodScores": period_scores,
-                "fetchedAt": fetched_at,
-            })
+                pending_home = None
+            else:
+                # Away row with no pending home — orphan, skip
+                pending_home = None
 
         await browser.close()
         return matches
