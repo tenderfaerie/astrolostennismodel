@@ -258,7 +258,7 @@ def build_header(story):
     t = Table([[
         Paragraph("ASTROTENNIS", S_LOGO),
         Paragraph("ROLAND GARROS 2026 · JUNE 1<br/>"
-                  "<font color='#fb923c' size='8'>STATS EDITION v5 — QF Results + Live Odds + 6 Remaining Matches</font>", S_EV),
+                  "<font color='#fb923c' size='8'>STATS EDITION v5 — QF Results + Live Odds + 6 Remaining Match Projections</font>", S_EV),
     ]], colWidths=[3.5*inch, 4.5*inch])
     t.setStyle(TableStyle([
         ("BACKGROUND",(0,0),(-1,-1),NAVY),
@@ -272,7 +272,7 @@ def build_header(story):
 
 
 def build_completed_results(story):
-    story.append(Paragraph("COMPLETED QF RESULTS — REAL MATCH DATA (Sofascore)", S_SECTION))
+    story.append(Paragraph("COMPLETED QF RESULTS — REAL MATCH DATA", S_SECTION))
     hdr = [cell(h, bold=True, color=GOLD, align="CENTER" if h != "Match" else "LEFT")
            for h in ["Match","Winner","Score","Key Stats","FS","Note"]]
     rows = [hdr]
@@ -306,7 +306,7 @@ def build_completed_results(story):
 
 
 def build_remaining_preview(story):
-    story.append(Paragraph("REMAINING 6 MATCHES — LIVE ODDS + CLAY MODEL + H2H", S_SECTION))
+    story.append(Paragraph("REMAINING 6 MATCHES — LIVE ODDS + CLAY MODEL + H2H ANALYTICS", S_SECTION))
     hdr = [cell(h, bold=True, color=GOLD, align="CENTER" if h != "Home" else "LEFT")
            for h in ["Home","Away","Home ML","Away ML","Mkt Home","Mkt Away","Clay H","Clay A","Edge","Analysis"]]
     rows = [hdr]
@@ -472,7 +472,7 @@ def build_footer(story):
     story.append(Spacer(1,3))
     story.append(Paragraph(
         "AstroTennis · Roland Garros 2026 · June 1  |  "
-        "v5: Real QF Stats + Live Sofascore Odds + Scraped H2H + Clay Model  |  "
+        "v5: AstroTennis proprietary model · Live odds + H2H analytics + Clay model  |  "
         "For entertainment purposes only",
         style("ft", fontSize=6.5, textColor=MUTED, alignment=TA_CENTER)
     ))

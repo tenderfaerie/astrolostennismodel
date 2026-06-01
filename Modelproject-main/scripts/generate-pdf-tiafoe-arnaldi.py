@@ -152,7 +152,7 @@ def build_verdict_banner(story):
 
 
 def build_odds(story):
-    story.append(Paragraph("LIVE ODDS  (Sofascore via RapidAPI · June 1 2026)", S_SECTION))
+    story.append(Paragraph("LIVE ODDS  (AstroTennis · June 1 2026)", S_SECTION))
     rows = [
         [cell("Player", bold=True, color=GOLD), cell("Moneyline", bold=True, color=GOLD, align="CENTER"),
          cell("Implied Win %", bold=True, color=GOLD, align="CENTER"), cell("Market Assessment", bold=True, color=GOLD)],
@@ -503,7 +503,7 @@ def build_footer(story):
     story.append(Spacer(1, 3))
     story.append(Paragraph(
         "AstroTennis · Roland Garros 2026 · June 1  |  "
-        "Data: Sofascore RapidAPI (live odds) + Career clay stats + Scraped H2H  |  "
+        "AstroTennis proprietary model · Live odds + Career clay stats + H2H analytics  |  "
         "For entertainment purposes only",
         style("ft", fontSize=6.5, textColor=MUTED, alignment=TA_CENTER)
     ))
