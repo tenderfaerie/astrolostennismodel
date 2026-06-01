@@ -622,7 +622,7 @@ def _extract_player_links(row_html: str) -> list[tuple[str, str]]:
             if "h2h" not in slug.lower() and name.strip()
             and not re.match(r"^\d+$", name.strip())]
 
-async def scrape_scores_async(mode: str) -> list[dict]:
+async def scrape_scores_async(mode: str, dump_html: bool = False) -> list[dict]:
     from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
     async with async_playwright() as p:
@@ -705,6 +705,8 @@ async def scrape_scores_async(mode: str) -> list[dict]:
             texts = [(await c.inner_text()).strip() for c in cells]
             row_html = await row.inner_html()
             raw_rows.append((texts, row_html))
+
+        print(f"[DEBUG] Total table rows found: {len(raw_rows)}")
 
         # ── Process rows ──────────────────────────────────────────────────────
         matches = []
@@ -823,11 +825,18 @@ async def scrape_scores_async(mode: str) -> list[dict]:
                 # Away row with no pending home — orphan, skip
                 pending_home = None
 
+        if dump_html:
+            dump_path = DATA / "matches" / f"debug-{mode}.html"
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(await page.content(), encoding="utf-8")
+            print(f"[DEBUG] Full page HTML saved → {dump_path}")
+
         await browser.close()
         return matches
 
 def cmd_matches(mode: str):
-    matches = asyncio.run(scrape_scores_async(mode))
+    dump_html = "--dump" in sys.argv
+    matches = asyncio.run(scrape_scores_async(mode, dump_html=dump_html))
     today = date.today().isoformat()
     fname = f"{mode}.json" if mode in ("live", "upcoming") else f"finished-{today}.json"
     save(DATA / "matches" / fname, matches)
