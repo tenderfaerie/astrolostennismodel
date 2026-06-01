@@ -622,6 +622,205 @@ def _extract_player_links(row_html: str) -> list[tuple[str, str]]:
             if "h2h" not in slug.lower() and name.strip()
             and not re.match(r"^\d+$", name.strip())]
 
+async def scrape_itf_async(mode: str, dump_html: bool = False) -> list[dict]:
+    """Scrape ITF Men + Women matches from the dedicated /itf/ page."""
+    from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+
+    itf_url = f"{BASE}/itf/"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            args=["--no-sandbox", "--ignore-certificate-errors",
+                  "--disable-blink-features=AutomationControlled"]
+        )
+        ctx = await browser.new_context(user_agent=HEADERS["user-agent"], locale="en-US")
+        page = await ctx.new_page()
+        await page.goto(itf_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.wait_for_selector("table", timeout=10000)
+        except PlaywrightTimeout:
+            print("[WARN] ITF page: no table found within timeout")
+
+        target = TAB_TEXT.get(mode, "live tennis")
+        if mode != "live":
+            clicked = False
+            for selector in [f"a:has-text('{target}')", f"li:has-text('{target}')",
+                             f"div:has-text('{target}')"]:
+                try:
+                    loc = page.locator(selector).first
+                    if await loc.is_visible(timeout=2000):
+                        await loc.click()
+                        clicked = True
+                        break
+                except Exception:
+                    continue
+            if not clicked:
+                for el in await page.query_selector_all("a, li, div, span, button"):
+                    try:
+                        txt = (await el.inner_text()).strip().lower()
+                        if txt == target:
+                            await el.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+            if clicked:
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    await asyncio.sleep(3)
+                await asyncio.sleep(1)
+            else:
+                print(f"[WARN] ITF: could not find tab: {target!r}")
+
+        # Scroll to load all rows
+        prev_count = 0
+        for _ in range(10):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.8)
+            count = await page.evaluate("document.querySelectorAll('table tr').length")
+            if count == prev_count:
+                break
+            prev_count = count
+
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        status_type = "inprogress" if mode == "live" else (
+            "notstarted" if mode == "upcoming" else "finished")
+        status_label = "Live" if mode == "live" else ("Scheduled" if mode == "upcoming" else "Finished")
+
+        raw_rows = []
+        for row in await page.query_selector_all("table tr"):
+            cells = await row.query_selector_all("td, th")
+            texts = [(await c.inner_text()).strip() for c in cells]
+            row_html = await row.inner_html()
+            raw_rows.append((texts, row_html))
+
+        print(f"[DEBUG] ITF page total rows: {len(raw_rows)}")
+
+        if dump_html:
+            dump_path = DATA / "matches" / f"debug-itf-{mode}.html"
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(await page.content(), encoding="utf-8")
+            print(f"[DEBUG] ITF HTML saved → {dump_path}")
+
+        await browser.close()
+
+        # Reuse the same row-parsing logic as main scraper
+        matches = []
+        pending_home = None
+        current_tournament = "ITF"
+        current_surface = "Unknown"
+        current_tour = "ITF"
+
+        def row_scores(texts):
+            nums = []
+            for t in texts:
+                if not re.match(r"^\d{1,2}$", t):
+                    continue
+                v = int(t)
+                if v <= 7:
+                    nums.append(v)
+            return nums
+
+        for texts, row_html in raw_rows:
+            if not any(texts):
+                continue
+            if any(t.lower() in _WEEKDAYS for t in texts):
+                pending_home = None
+                continue
+            lower_texts = [t.lower() for t in texts]
+            if "sets" in lower_texts:
+                skip_words = {"sets","h2h","1","2","3","4","5","s1","s2","s3","s4","s5"}
+                t_name = next((t for t in texts if t and t.lower() not in skip_words
+                               and not re.match(r"^\d+$", t)), None)
+                if t_name:
+                    current_tournament = t_name
+                    current_surface = infer_surface(t_name)
+                    current_tour = infer_tour(t_name)
+                pending_home = None
+                continue
+            if len(texts) <= 2:
+                full = " ".join(t for t in texts if t).strip()
+                if full and not any(c.isdigit() for c in full[:3]):
+                    current_tournament = full
+                    current_surface = infer_surface(full)
+                    current_tour = infer_tour(full)
+                pending_home = None
+                continue
+
+            player_links = _extract_player_links(row_html)
+            if not player_links:
+                pending_home = None
+                continue
+
+            slug, name = player_links[0]
+            name = re.sub(r"\s*\[\d+\]$", "", name).strip()
+            has_time = bool(re.search(r"\d{1,2}:\d{2}", texts[0]))
+
+            if has_time:
+                time_str = re.search(r"\d{1,2}:\d{2}", texts[0]).group(0)
+                round_parts = texts[0].split("\n")
+                round_info = " ".join(p.strip() for p in round_parts[1:] if p.strip())
+                pending_home = {
+                    "slug": slug, "name": name,
+                    "scores": row_scores(texts),
+                    "time": time_str, "round": round_info,
+                    "tournament": current_tournament,
+                    "surface": current_surface,
+                    "tour": current_tour,
+                }
+            elif pending_home is not None:
+                away_scores = row_scores(texts)
+                home_scores = pending_home["scores"]
+                n_sets = min(len(home_scores), len(away_scores), 5)
+                while n_sets > 1 and home_scores[n_sets-1] == 0 and away_scores[n_sets-1] == 0:
+                    n_sets -= 1
+                period_scores = [
+                    {"period": f"S{i+1}", "home": home_scores[i], "away": away_scores[i]}
+                    for i in range(n_sets)
+                ]
+                home_sets = sum(1 for i in range(n_sets) if home_scores[i] > away_scores[i])
+                away_sets = sum(1 for i in range(n_sets) if away_scores[i] > home_scores[i])
+                matches.append({
+                    "provider": "tennislive",
+                    "providerId": f"itf-{len(matches)+1}",
+                    "tournament": pending_home["tournament"],
+                    "category": pending_home["tour"],
+                    "surface": pending_home["surface"],
+                    "status": status_label,
+                    "statusType": status_type,
+                    "startTime": pending_home["time"],
+                    "round": pending_home["round"] or None,
+                    "homePlayer": pending_home["name"],
+                    "homeSlug": pending_home["slug"],
+                    "awayPlayer": name,
+                    "awaySlug": slug,
+                    "homeSetsWon": home_sets,
+                    "awaySetsWon": away_sets,
+                    "homeScore": home_scores[0] if home_scores else None,
+                    "awayScore": away_scores[0] if away_scores else None,
+                    "periodScores": period_scores,
+                    "fetchedAt": fetched_at,
+                })
+                pending_home = None
+            else:
+                pending_home = None
+
+        return matches
+
+
+def cmd_itf(mode: str):
+    dump_html = "--dump" in sys.argv
+    matches = asyncio.run(scrape_itf_async(mode, dump_html=dump_html))
+    today = date.today().isoformat()
+    fname = f"itf-{mode}.json" if mode in ("live", "upcoming") else f"itf-finished-{today}.json"
+    save(DATA / "matches" / fname, matches)
+    # Split summary by tour
+    men   = [m for m in matches if "men"   in m.get("category","").lower()]
+    women = [m for m in matches if "women" in m.get("category","").lower()]
+    print(f"Saved {len(matches)} ITF {mode} matches → data/tennislive/matches/{fname}")
+    print(f"  ITF Men: {len(men)}   ITF Women: {len(women)}")
+
+
 async def scrape_scores_async(mode: str, dump_html: bool = False) -> list[dict]:
     from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
@@ -897,6 +1096,9 @@ if __name__ == "__main__":
     elif cmd == "matches":
         mode = sys.argv[2] if len(sys.argv) > 2 else "live"
         cmd_matches(mode)
+    elif cmd == "itf":
+        mode = sys.argv[2] if len(sys.argv) > 2 else "live"
+        cmd_itf(mode)
     elif cmd == "tournament":
         if len(sys.argv) < 3:
             print("Usage: tournament <slug>")
