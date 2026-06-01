@@ -39,29 +39,38 @@ RG_JUNE1_IDS = [
 
 
 async def fetch_h2h(page, event_id: str) -> dict:
-    """Use browser's existing session cookies to call the H2H API."""
+    """Navigate to match page and intercept the H2H API response."""
+    import re as _re
+    match_url = f"https://www.sofascore.com/event/{event_id}#id:{event_id}"
+
     try:
-        result = await page.evaluate(f"""
-            async () => {{
-                const r = await fetch(
-                    'https://api.sofascore.com/api/v1/event/{event_id}/h2h',
-                    {{
-                        headers: {{
-                            'Accept': 'application/json, text/plain, */*',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Referer': 'https://www.sofascore.com/',
-                            'Origin': 'https://www.sofascore.com',
-                        }},
-                        credentials: 'include'
-                    }}
-                );
-                if (!r.ok) return {{ error: r.status }};
-                return await r.json();
-            }}
-        """)
-        return result or {}
-    except Exception as e:
-        return {"error": str(e)}
+        async with page.expect_response(
+            lambda r: f"/event/{event_id}/h2h" in r.url and r.status == 200,
+            timeout=15000
+        ) as resp_info:
+            await page.goto(match_url, wait_until="domcontentloaded", timeout=20000)
+
+        resp = await resp_info.value
+        return await resp.json()
+
+    except Exception:
+        # H2H didn't fire on load — try clicking the H2H tab
+        for sel in ["a:has-text('H2H')", "button:has-text('H2H')",
+                    "[data-testid='h2h']", "li:has-text('H2H')"]:
+            try:
+                async with page.expect_response(
+                    lambda r: f"/event/{event_id}/h2h" in r.url and r.status == 200,
+                    timeout=6000
+                ) as resp_info:
+                    loc = page.locator(sel).first
+                    if await loc.is_visible(timeout=1000):
+                        await loc.click()
+                resp = await resp_info.value
+                return await resp.json()
+            except Exception:
+                continue
+
+    return {}
 
 
 def parse_h2h(raw: dict, event_id: str) -> dict:
