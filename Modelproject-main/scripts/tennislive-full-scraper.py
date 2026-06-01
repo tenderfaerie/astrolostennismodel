@@ -11,6 +11,7 @@ Usage:
   python3 tennislive-full-scraper.py players_from <tour> <slug-list-file>
   python3 tennislive-full-scraper.py player <tour> <slug>
   python3 tennislive-full-scraper.py matches <live|upcoming|finished>
+  python3 tennislive-full-scraper.py itf <live|upcoming|finished>   # ITF Men + Women only
   python3 tennislive-full-scraper.py tournament <slug>   # single tournament results
   python3 tennislive-full-scraper.py all                 # full pipeline
 
@@ -809,16 +810,19 @@ async def scrape_itf_async(mode: str, dump_html: bool = False) -> list[dict]:
 
 
 def cmd_itf(mode: str):
+    """Scrape the main scores page and filter to ITF Men + ITF Women only."""
     dump_html = "--dump" in sys.argv
-    matches = asyncio.run(scrape_itf_async(mode, dump_html=dump_html))
+    all_matches = asyncio.run(scrape_scores_async(mode, dump_html=dump_html))
+    itf = [m for m in all_matches if "itf" in m.get("category", "").lower()]
     today = date.today().isoformat()
     fname = f"itf-{mode}.json" if mode in ("live", "upcoming") else f"itf-finished-{today}.json"
-    save(DATA / "matches" / fname, matches)
-    # Split summary by tour
-    men   = [m for m in matches if "men"   in m.get("category","").lower()]
-    women = [m for m in matches if "women" in m.get("category","").lower()]
-    print(f"Saved {len(matches)} ITF {mode} matches → data/tennislive/matches/{fname}")
+    save(DATA / "matches" / fname, itf)
+    men   = [m for m in itf if "men"   in m.get("category", "").lower()]
+    women = [m for m in itf if "women" in m.get("category", "").lower()]
+    print(f"Saved {len(itf)} ITF {mode} matches → data/tennislive/matches/{fname}")
     print(f"  ITF Men: {len(men)}   ITF Women: {len(women)}")
+    if not itf:
+        print(f"  (Total matches scraped from main page: {len(all_matches)} — ITF may not be listed today)")
 
 
 async def scrape_scores_async(mode: str, dump_html: bool = False) -> list[dict]:
