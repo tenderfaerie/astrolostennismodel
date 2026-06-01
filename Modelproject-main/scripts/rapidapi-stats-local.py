@@ -109,8 +109,14 @@ def get_player_match_stats(match_id, player_id):
 
 
 def get_player_recent_matches(player_id):
-    """Get recent matches for a player to find clay results."""
-    return get(f"/players/{player_id}/matches/previous/0")
+    """Get recent matches for a player to find clay results.
+    Sofascore tennis treats players as 'teams', so use /teams/ endpoint."""
+    # Try teams endpoint first (Sofascore tennis players = teams)
+    result = get(f"/teams/{player_id}/matches/previous/0")
+    if not result or result.get("error"):
+        # Fallback: try with page param
+        result = get("/teams/matches/previous", {"teamId": player_id, "page": 0})
+    return result
 
 
 def parse_match_stats(raw):
@@ -163,28 +169,32 @@ def lookup_player_ids():
 
 
 def fetch_r16_stats():
-    """Get stats from yesterday's R16 matches."""
-    print("\nFetching R16 match stats...")
+    """Get recent clay match history for each player."""
+    print("\nFetching recent match history per player...")
     r16_stats = {}
-
-    # We need the actual R16 match IDs for the players who are in today's QF
-    # The QF match IDs are reused — we need their R16 match IDs
-    # Let's get them from player recent matches
-    r16_match_ids = {
-        # Known R16 match IDs from earlier in the tournament
-        # These are the matches played yesterday (R16)
-        # We'll fetch via player recent matches
-    }
 
     for player, pid in PLAYER_IDS.items():
         if pid is None:
             continue
-        print(f"  {player} recent matches...", end=" ", flush=True)
+        print(f"  {player}...", end=" ", flush=True)
         recent = get_player_recent_matches(pid)
-        events = recent.get("events", [])
+
+        # Handle different response shapes
+        events = (recent.get("events") or
+                  recent.get("previousEvents") or
+                  recent.get("data", {}).get("events") or [])
+
+        if not events:
+            # Try alternate key structures
+            for key in recent:
+                val = recent[key]
+                if isinstance(val, list) and len(val) > 0:
+                    events = val
+                    break
 
         clay_matches = []
-        for e in events[:20]:  # last 20 matches
+        all_recent = []
+        for e in events[:25]:
             ground = (e.get("groundType") or
                       e.get("tournament", {}).get("groundType") or "").lower()
             tourn_name = (e.get("tournament", {}).get("uniqueTournament", {}).get("name")
@@ -192,24 +202,36 @@ def fetch_r16_stats():
             ts = e.get("startTimestamp", 0)
             year = datetime.fromtimestamp(ts).strftime("%Y") if ts else "?"
             eid = str(e.get("id", ""))
+            home_name = e.get("homeTeam", {}).get("name") or ""
+            away_name = e.get("awayTeam", {}).get("name") or ""
+            home_id = e.get("homeTeam", {}).get("id")
+            w_code = e.get("winnerCode")
+            is_home = pid == home_id
+            won = (w_code == 1 and is_home) or (w_code == 2 and not is_home)
+            status = e.get("status", {}).get("type", "")
 
+            match_entry = {
+                "matchId": eid,
+                "tournament": tourn_name,
+                "year": year,
+                "surface": e.get("groundType") or "?",
+                "opponent": away_name if is_home else home_name,
+                "won": won,
+                "status": status,
+            }
+            all_recent.append(match_entry)
             if "clay" in ground:
-                home_name = e.get("homeTeam", {}).get("name") or ""
-                away_name = e.get("awayTeam", {}).get("name") or ""
-                w_code = e.get("winnerCode")
-                is_home = pid == e.get("homeTeam", {}).get("id")
-                won = (w_code == 1 and is_home) or (w_code == 2 and not is_home)
-                clay_matches.append({
-                    "matchId": eid,
-                    "tournament": tourn_name,
-                    "year": year,
-                    "opponent": away_name if is_home else home_name,
-                    "won": won,
-                    "surface": e.get("groundType") or "clay",
-                })
+                clay_matches.append(match_entry)
 
-        print(f"{len(clay_matches)} clay matches found")
-        r16_stats[player] = {"recentClay": clay_matches[:5]}
+        total = len(events)
+        clay_n = len(clay_matches)
+        print(f"{total} matches, {clay_n} clay")
+
+        r16_stats[player] = {
+            "recentClay": clay_matches[:6],
+            "recentAll": all_recent[:6],
+            "rawKeys": list(recent.keys()) if not events else [],
+        }
         time.sleep(0.4)
 
     return r16_stats
