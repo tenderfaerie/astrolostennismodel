@@ -105,11 +105,13 @@ def status_label(raw: str) -> tuple[str, str]:
 
 async def scrape_path(page, path: str, mode: str, section: str, dump: bool = False) -> list:
     """Navigate to one flashscore path and scrape all match rows."""
-    url = f"{BASE_URL}{path}"
-    print(f"  → {url} [{mode}]")
+    # Navigate directly to the mode-specific URL (more reliable than tab clicking)
+    mode_suffix = {"finished": "results/", "upcoming": "scheduled/", "live": ""}
+    url = f"{BASE_URL}{path}{mode_suffix.get(mode, '')}"
+    print(f"  → {url}")
 
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    await page.wait_for_timeout(2500)
+    await page.wait_for_timeout(3000)
 
     # Cookie banner dismiss
     for sel in ["button#onetrust-accept-btn-handler", "button:has-text('Accept')",
@@ -122,30 +124,6 @@ async def scrape_path(page, path: str, mode: str, section: str, dump: bool = Fal
                 break
         except Exception:
             pass
-
-    # Tab switching
-    if mode == "finished":
-        for sel in ["a:has-text('Results')", "a[href*='results']",
-                     "button:has-text('Results')", ".filters__tab:has-text('Results')"]:
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=2000):
-                    await loc.click()
-                    await page.wait_for_timeout(2500)
-                    break
-            except Exception:
-                pass
-    elif mode == "upcoming":
-        for sel in ["a:has-text('Scheduled')", "a[href*='scheduled']",
-                     "button:has-text('Scheduled')"]:
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=2000):
-                    await loc.click()
-                    await page.wait_for_timeout(2500)
-                    break
-            except Exception:
-                pass
 
     # Expand all "Show more" buttons
     for _ in range(5):
@@ -185,13 +163,21 @@ async def scrape_path(page, path: str, mode: str, section: str, dump: bool = Fal
 
         if "event__header" in cls:
             try:
-                name_el = await el.query_selector(
-                    "[class*='event__title--name'], [class*='event__title']"
-                )
-                if name_el:
-                    current_tournament = (await name_el.inner_text()).strip()
-                    current_surface  = infer_surface(current_tournament)
-                    current_category = infer_category(current_tournament)
+                # Try several selector patterns — Flashscore changes class names
+                for hsel in [
+                    "[class*='event__title--name']",
+                    "[class*='event__titleBox']",
+                    "[class*='event__title']",
+                    "span", "a",
+                ]:
+                    name_el = await el.query_selector(hsel)
+                    if name_el:
+                        txt = (await name_el.inner_text()).strip()
+                        if txt and len(txt) > 2:
+                            current_tournament = txt
+                            current_surface  = infer_surface(current_tournament)
+                            current_category = infer_category(current_tournament)
+                            break
             except Exception:
                 pass
             continue
