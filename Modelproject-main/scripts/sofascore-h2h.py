@@ -39,54 +39,29 @@ RG_JUNE1_IDS = [
 
 
 async def fetch_h2h(page, event_id: str) -> dict:
-    """Intercept the H2H API call by navigating to the match page."""
-    h2h_data = {}
-
-    async def handle_response(response):
-        if f"/event/{event_id}/h2h" in response.url:
-            try:
-                body = await response.json()
-                h2h_data.update(body)
-            except Exception:
-                pass
-
-    page.on("response", handle_response)
-
-    # Navigate to sofascore match page — this triggers the H2H API call
-    url = f"https://www.sofascore.com/event/{event_id}"
-    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-    await page.wait_for_timeout(3000)
-
-    # Click H2H tab if needed
-    for sel in ["a:has-text('H2H')", "button:has-text('H2H')",
-                "[data-tabid='h2h']", "li:has-text('H2H')"]:
-        try:
-            loc = page.locator(sel).first
-            if await loc.is_visible(timeout=1500):
-                await loc.click()
-                await page.wait_for_timeout(2000)
-                break
-        except Exception:
-            pass
-
-    # Also try direct API now that we have cookies
+    """Use browser's existing session cookies to call the H2H API."""
     try:
-        api_url = f"https://api.sofascore.com/api/v1/event/{event_id}/h2h"
-        resp = await page.evaluate(f"""
-            fetch('{api_url}', {{
-                headers: {{
-                    'Accept': 'application/json',
-                    'Referer': 'https://www.sofascore.com/'
-                }}
-            }}).then(r => r.json())
+        result = await page.evaluate(f"""
+            async () => {{
+                const r = await fetch(
+                    'https://api.sofascore.com/api/v1/event/{event_id}/h2h',
+                    {{
+                        headers: {{
+                            'Accept': 'application/json, text/plain, */*',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Referer': 'https://www.sofascore.com/',
+                            'Origin': 'https://www.sofascore.com',
+                        }},
+                        credentials: 'include'
+                    }}
+                );
+                if (!r.ok) return {{ error: r.status }};
+                return await r.json();
+            }}
         """)
-        if resp and "events" in resp:
-            h2h_data.update(resp)
-    except Exception:
-        pass
-
-    page.remove_listener("response", handle_response)
-    return h2h_data
+        return result or {}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 def parse_h2h(raw: dict, event_id: str) -> dict:
@@ -203,8 +178,10 @@ async def main():
                 pass
 
         for i, eid in enumerate(event_ids):
-            print(f"  [{i+1}/{len(event_ids)}] Fetching H2H for event {eid}...")
+            print(f"  [{i+1}/{len(event_ids)}] event {eid}...", end=" ", flush=True)
             raw = await fetch_h2h(page, eid)
+            if raw.get("error"):
+                print(f"ERROR {raw['error']}")
             parsed = parse_h2h(raw, eid)
             results.append(parsed)
             home = parsed.get("homePlayer", "?")
