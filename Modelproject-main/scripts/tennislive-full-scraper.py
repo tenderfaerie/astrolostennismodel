@@ -786,6 +786,9 @@ async def scrape_scores_async(mode: str) -> list[dict]:
                 home_scores = pending_home["scores"]
 
                 n_sets = min(len(home_scores), len(away_scores), 5)
+                # Drop trailing phantom sets where both sides are 0 (empty columns)
+                while n_sets > 1 and home_scores[n_sets-1] == 0 and away_scores[n_sets-1] == 0:
+                    n_sets -= 1
                 period_scores = [
                     {"period": f"S{i+1}", "home": home_scores[i], "away": away_scores[i]}
                     for i in range(n_sets)
