@@ -166,7 +166,59 @@ def get_odds(session, event_id):
     return {"homeOdds": home_odds, "awayOdds": away_odds,
             "suspended": bool(market.get("suspended"))}
 
-def enrich(session, match, fetch_stats=True):
+def get_h2h(session, event_id):
+    """Return H2H summary: overall and clay records."""
+    raw = try_get(session, f"/event/{event_id}/h2h")
+    if not raw:
+        return {}
+    events = raw.get("events", [])
+    if not events:
+        return {}
+
+    total     = len(events)
+    home_wins = sum(1 for e in events if e.get("winnerCode") == 1)
+    away_wins = sum(1 for e in events if e.get("winnerCode") == 2)
+
+    def is_clay(e):
+        g = (e.get("groundType") or
+             e.get("tournament", {}).get("groundType") or "").lower()
+        return "clay" in g
+
+    clay_matches = [e for e in events if is_clay(e)]
+    clay_home = sum(1 for e in clay_matches if e.get("winnerCode") == 1)
+    clay_away = sum(1 for e in clay_matches if e.get("winnerCode") == 2)
+
+    # Last 5 meetings
+    recent = []
+    for e in events[:5]:
+        ts = e.get("startTimestamp")
+        year = ""
+        if ts:
+            from datetime import datetime as dt
+            year = dt.fromtimestamp(ts).strftime("%Y")
+        surf = (e.get("groundType") or
+                e.get("tournament", {}).get("groundType") or "?")
+        winner = (e.get("homeTeam", {}).get("name") if e.get("winnerCode") == 1
+                  else e.get("awayTeam", {}).get("name") or "?")
+        tourn = (e.get("tournament", {}).get("uniqueTournament", {}).get("name")
+                 or e.get("tournament", {}).get("name") or "")
+        recent.append({
+            "year": year, "surface": surf,
+            "tournament": tourn, "winner": winner,
+        })
+
+    return {
+        "totalMatches": total,
+        "homeWins": home_wins,
+        "awayWins": away_wins,
+        "clayMatches": len(clay_matches),
+        "clayHomeWins": clay_home,
+        "clayAwayWins": clay_away,
+        "recent": recent,
+    }
+
+
+def enrich(session, match, fetch_stats=True, fetch_h2h=True):
     eid = match["providerId"]
     if fetch_stats:
         stats = get_stats(session, eid)
@@ -175,6 +227,10 @@ def enrich(session, match, fetch_stats=True):
     odds = get_odds(session, eid)
     if odds.get("homeOdds") or odds.get("awayOdds"):
         match["moneyline"] = odds
+    if fetch_h2h:
+        h2h = get_h2h(session, eid)
+        if h2h:
+            match["h2h"] = h2h
     return match
 
 def main():
@@ -218,9 +274,9 @@ def main():
     matches = []
     for i, event in enumerate(singles):
         match = normalize_event(event)
-        # Fetch stats for finished + live; skip for pure upcoming (no stats yet)
         fetch_stats = match["statusType"] in ("finished", "inprogress")
-        match = enrich(session, match, fetch_stats=fetch_stats)
+        fetch_h2h   = True  # always get H2H
+        match = enrich(session, match, fetch_stats=fetch_stats, fetch_h2h=fetch_h2h)
         matches.append(match)
         if (i + 1) % 10 == 0:
             print(f"  Enriched {i+1}/{len(singles)}...")
@@ -241,11 +297,12 @@ def main():
         by_status[s] = by_status.get(s, 0) + 1
     has_stats = sum(1 for m in matches if m.get("stats"))
     has_odds  = sum(1 for m in matches if m.get("moneyline"))
+    has_h2h   = sum(1 for m in matches if m.get("h2h"))
 
     print(f"\nSaved {len(matches)} matches → data/tennislive/matches/{fname}")
     for s, n in sorted(by_status.items()):
         print(f"  {s}: {n}")
-    print(f"  with stats: {has_stats}  with odds: {has_odds}")
+    print(f"  with stats: {has_stats}  with odds: {has_odds}  with H2H: {has_h2h}")
 
 
 if __name__ == "__main__":
