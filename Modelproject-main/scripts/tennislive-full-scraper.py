@@ -357,6 +357,7 @@ def scrape_tournament_matches(slug: str, url: str) -> list[dict]:
     matches = []
     current_round = "Unknown"
     rows = re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.DOTALL)
+    print(f"  HTML length: {len(html)}  Table rows: {len(rows)}")
 
     for row in rows:
         # Round header rows
@@ -411,12 +412,28 @@ def cmd_tournament(slug: str):
     index = load(DATA / "tournaments" / "index.json") or []
     entry = next((t for t in index if t["slug"] == slug), None)
     if not entry:
+        # Try both atp-men and wta-women URL patterns
         url = f"{BASE}/atp-men/{slug}/"
         entry = {"slug": slug, "url": url, "name": slug, "tour": "ATP"}
+    print(f"  URL: {entry['url']}")
     matches = scrape_tournament_matches(slug, entry["url"])
+    if not matches:
+        # Try alternate URL (wta-women)
+        alt_url = f"{BASE}/wta-women/{slug}/"
+        print(f"  0 matches — retrying: {alt_url}")
+        matches = scrape_tournament_matches(slug, alt_url)
     if matches:
         save(DATA / "tournaments" / f"{slug}.json", matches)
         print(f"Saved {len(matches)} matches for {slug}")
+    else:
+        print(f"  No matches found for {slug} — check slug or try: tournament <slug> --dump")
+        # Dump raw HTML for inspection
+        if "--dump" in sys.argv:
+            html = fetch(entry["url"])
+            dump_path = DATA / "tournaments" / f"debug-{slug}.html"
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            dump_path.write_text(html or "", encoding="utf-8")
+            print(f"  HTML dumped → {dump_path}")
 
 # ── Player profiles ───────────────────────────────────────────────────────────
 def parse_player_profile(html: str, tour: str, slug: str) -> dict:
