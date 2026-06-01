@@ -1,23 +1,18 @@
 """
-Run this script ON YOUR LOCAL MACHINE.
-Fetches match stats for all QF players via RapidAPI Sofascore.
-
-Steps:
-  1. Gets R16 match stats (yesterday's matches)
-  2. Gets recent clay match stats (Rome/Madrid) for each player
-  3. Saves player-stats-2026-06-01.json — upload that to Claude
+Run this ON YOUR LOCAL MACHINE.
+Pulls match statistics for all 11 RG matches via RapidAPI Sofascore.
+matches/get-statistics works directly with match IDs — no player lookup needed.
 
 Usage:
   pip install requests
   python3 rapidapi-stats-local.py
 
-Output: player-stats-2026-06-01.json
+Output: player-stats-2026-06-01.json  — upload to Claude
 """
 
 import json
 import time
 import requests
-from datetime import datetime
 
 API_KEY = "ccb713eb03msh65a47090f359a7fp158927jsncaee283e8076"
 HEADERS = {
@@ -27,19 +22,7 @@ HEADERS = {
 }
 BASE = "https://sofascore.p.rapidapi.com"
 
-# ── R16 match IDs (yesterday's completed matches) ─────────────────────────────
-# Each entry: (matchId, home_player, away_player)
-R16_MATCHES = [
-    # ATP R16 — players in today's QF
-    ("16198473", "Mensik",    "Fonseca"),    # Mensik vs Fonseca R16 (wait — check: Mensik beat Rublev, Fonseca beat Ruud)
-    ("16198476", "Jodar",     "Zverev"),     # Jodar R16, Zverev R16
-    # WTA R16 — players in today's QF
-    ("16198539", "Andreeva",  "Cirstea"),    # Andreeva R16
-    ("16198546", "Svitolina", "Kostyuk"),    # Svitolina R16
-]
-
-# ── TODAY'S QF match IDs ──────────────────────────────────────────────────────
-QF_MATCHES = [
+MATCHES = [
     ("16198484", "Cobolli",    "Svajda"),
     ("16198515", "Cerundolo",  "Berrettini"),
     ("16198517", "Tiafoe",     "Arnaldi"),
@@ -53,290 +36,98 @@ QF_MATCHES = [
     ("16198539", "Andreeva",   "Cirstea"),
 ]
 
-# ── Player IDs (Sofascore) ────────────────────────────────────────────────────
-# Get these from matches/detail homeTeam.id / awayTeam.id
-# We'll look them up dynamically, but hardcode known ones as fallback
-PLAYER_IDS = {
-    "Cobolli":    273680,
-    "Svajda":     298247,
-    "Mensik":     None,   # will be fetched
-    "Fonseca":    None,
-    "Zverev":     None,
-    "Jodar":      None,
-    "Andreeva":   None,
-    "Cirstea":    None,
-    "Svitolina":  None,
-    "Kostyuk":    None,
-    "Sabalenka":  None,
-    "Osaka":      None,
-    "Keys":       None,
-    "Shnaider":   None,
-    "Cerundolo":  None,
-    "Berrettini": None,
-    "Tiafoe":     None,
-    "Arnaldi":    None,
-    "FAA":        None,
-    "Tabilo":     None,
-    "Potapova":   None,
-    "Kalinskaya": None,
-}
-
-
 def get(path, params=None):
     try:
         r = requests.get(f"{BASE}{path}", headers=HEADERS, params=params, timeout=10)
         if r.status_code == 200:
             return r.json()
-        print(f"  HTTP {r.status_code}: {path} {params}")
+        print(f"  HTTP {r.status_code}")
     except Exception as e:
         print(f"  Error: {e}")
     return {}
 
-
-def get_match_detail(match_id):
-    return get("/matches/detail", {"matchId": match_id})
-
-
-def get_match_stats(match_id):
-    """Get overall match stats (aces, DFs, 1st serve %, etc.)"""
-    return get("/matches/get-statistics", {"matchId": match_id})
-
-
-def get_player_match_stats(match_id, player_id):
-    """Get individual player stats for a specific match."""
-    return get("/matches/get-player-statistics",
-               {"matchId": match_id, "playerId": player_id})
-
-
-def get_player_recent_matches(player_id):
-    """Get recent matches for a player to find clay results.
-    Sofascore tennis treats players as 'teams', so use /teams/ endpoint."""
-    # Try teams endpoint first (Sofascore tennis players = teams)
-    result = get(f"/teams/{player_id}/matches/previous/0")
-    if not result or result.get("error"):
-        # Fallback: try with page param
-        result = get("/teams/matches/previous", {"teamId": player_id, "page": 0})
-    return result
-
-
-def parse_match_stats(raw):
-    """Extract key tennis stats from match statistics response."""
+def parse_stats(raw):
+    """Flatten all stats periods into a clean dict."""
     result = {}
-    stats_list = raw.get("statistics", []) or []
-    for block in stats_list:
-        if block.get("period") not in ("ALL", None, ""):
-            continue
+    for block in raw.get("statistics", []):
+        period = block.get("period", "ALL")
         for group in block.get("groups", []):
+            group_name = group.get("groupName", "")
             for item in group.get("statisticsItems", []):
-                key = item.get("key") or item.get("name") or ""
-                result[key] = {
-                    "home": item.get("home"),
-                    "away": item.get("away"),
-                    "name": item.get("name"),
+                key   = item.get("key") or item.get("name", "").replace(" ", "_")
+                home  = item.get("home")
+                away  = item.get("away")
+                label = f"{key}__{period}" if period != "ALL" else key
+                result[label] = {
+                    "name":  item.get("name"),
+                    "group": group_name,
+                    "home":  home,
+                    "away":  away,
                 }
     return result
 
+def get_odds(match_id):
+    raw = get("/matches/get-all-odds", {"matchId": match_id})
+    markets = raw.get("markets", [])
+    market = next(
+        (m for m in markets if m.get("marketId") == 1
+         or m.get("marketName") in ("Full time", "Winner", "Match Winner")),
+        None
+    )
+    if not market:
+        return {}
+    home = away = None
+    for choice in market.get("choices", []):
+        name = str(choice.get("name", "")).lower()
+        frac = choice.get("fractionalValue") or choice.get("initialFractionalValue")
+        pos  = choice.get("position")
+        if name in ("1", "home") or pos == 1:
+            home = frac
+        elif name in ("2", "away") or pos == 2:
+            away = frac
+    return {"homeFractional": home, "awayFractional": away,
+            "suspended": bool(market.get("suspended"))}
 
-def parse_player_stats(raw):
-    """Extract stats from player-statistics response."""
-    result = {}
-    for group in raw.get("playerStatistics", {}).get("statistics", []):
-        for item in group.get("statisticsItems", []):
-            key = item.get("key") or item.get("name") or ""
-            result[key] = item.get("value")
-    # Also try flat structure
-    stats = raw.get("statistics", {})
-    if isinstance(stats, dict):
-        result.update(stats)
-    return result
+results = []
+for match_id, home, away in MATCHES:
+    print(f"\n[{home} vs {away}]")
 
+    # Stats
+    print(f"  Stats...", end=" ", flush=True)
+    raw_stats = get("/matches/get-statistics", {"matchId": match_id})
+    stats = parse_stats(raw_stats)
+    if stats:
+        print(f"{len(stats)} keys")
+        # Show key stats
+        for key in ["Aces", "DoubleFaults", "FirstServePercentage",
+                    "FirstServePointsWon", "BreakPointsConverted",
+                    "Winners", "UnforcedErrors"]:
+            if key in stats:
+                s = stats[key]
+                print(f"    {s['name']}: {home} {s['home']} | {away} {s['away']}")
+    else:
+        print("no stats (match not yet played or unavailable)")
 
-def lookup_player_ids():
-    """Fetch player IDs from match detail for all QF matches."""
-    print("Looking up player IDs from match details...")
-    for match_id, home, away in QF_MATCHES:
-        detail = get_match_detail(match_id)
-        event = detail.get("event", {})
-        home_id = event.get("homeTeam", {}).get("id")
-        away_id = event.get("awayTeam", {}).get("id")
-        if home_id and PLAYER_IDS.get(home) is None:
-            PLAYER_IDS[home] = home_id
-            print(f"  {home}: {home_id}")
-        if away_id and PLAYER_IDS.get(away) is None:
-            PLAYER_IDS[away] = away_id
-            print(f"  {away}: {away_id}")
-        time.sleep(0.3)
+    # Odds
+    print(f"  Odds...", end=" ", flush=True)
+    odds = get_odds(match_id)
+    if odds.get("homeFractional") or odds.get("awayFractional"):
+        print(f"home={odds['homeFractional']} away={odds['awayFractional']}")
+    else:
+        print("no odds")
 
+    results.append({
+        "matchId":    match_id,
+        "homePlayer": home,
+        "awayPlayer": away,
+        "stats":      stats,
+        "odds":       odds,
+    })
+    time.sleep(0.4)
 
-def fetch_r16_stats():
-    """Get recent clay match history for each player."""
-    print("\nFetching recent match history per player...")
-    r16_stats = {}
+with open("player-stats-2026-06-01.json", "w", encoding="utf-8") as f:
+    json.dump(results, f, indent=2, ensure_ascii=False)
 
-    for player, pid in PLAYER_IDS.items():
-        if pid is None:
-            continue
-        print(f"  {player}...", end=" ", flush=True)
-        recent = get_player_recent_matches(pid)
-
-        # Handle different response shapes
-        events = (recent.get("events") or
-                  recent.get("previousEvents") or
-                  recent.get("data", {}).get("events") or [])
-
-        if not events:
-            # Try alternate key structures
-            for key in recent:
-                val = recent[key]
-                if isinstance(val, list) and len(val) > 0:
-                    events = val
-                    break
-
-        clay_matches = []
-        all_recent = []
-        for e in events[:25]:
-            ground = (e.get("groundType") or
-                      e.get("tournament", {}).get("groundType") or "").lower()
-            tourn_name = (e.get("tournament", {}).get("uniqueTournament", {}).get("name")
-                         or e.get("tournament", {}).get("name") or "")
-            ts = e.get("startTimestamp", 0)
-            year = datetime.fromtimestamp(ts).strftime("%Y") if ts else "?"
-            eid = str(e.get("id", ""))
-            home_name = e.get("homeTeam", {}).get("name") or ""
-            away_name = e.get("awayTeam", {}).get("name") or ""
-            home_id = e.get("homeTeam", {}).get("id")
-            w_code = e.get("winnerCode")
-            is_home = pid == home_id
-            won = (w_code == 1 and is_home) or (w_code == 2 and not is_home)
-            status = e.get("status", {}).get("type", "")
-
-            match_entry = {
-                "matchId": eid,
-                "tournament": tourn_name,
-                "year": year,
-                "surface": e.get("groundType") or "?",
-                "opponent": away_name if is_home else home_name,
-                "won": won,
-                "status": status,
-            }
-            all_recent.append(match_entry)
-            if "clay" in ground:
-                clay_matches.append(match_entry)
-
-        total = len(events)
-        clay_n = len(clay_matches)
-        print(f"{total} matches, {clay_n} clay")
-
-        r16_stats[player] = {
-            "recentClay": clay_matches[:6],
-            "recentAll": all_recent[:6],
-            "rawKeys": list(recent.keys()) if not events else [],
-        }
-        time.sleep(0.4)
-
-    return r16_stats
-
-
-def fetch_qf_match_stats():
-    """Get stats for today's QF matches (may be empty if not started)."""
-    print("\nFetching QF match stats (pre-match odds + any available stats)...")
-    qf_stats = {}
-    for match_id, home, away in QF_MATCHES:
-        print(f"  {home} vs {away}...", end=" ", flush=True)
-        stats = get_match_stats(match_id)
-        parsed = parse_match_stats(stats)
-        if parsed:
-            print(f"{len(parsed)} stat keys")
-        else:
-            print("no stats yet (pre-match)")
-        qf_stats[f"{home}_vs_{away}"] = {
-            "matchId": match_id,
-            "stats": parsed,
-        }
-        time.sleep(0.3)
-    return qf_stats
-
-
-def fetch_recent_clay_match_stats(r16_data):
-    """For each player, fetch actual stats from their most recent clay matches."""
-    print("\nFetching stats from recent clay matches...")
-    player_clay_stats = {}
-
-    for player, data in r16_data.items():
-        clay_matches = data.get("recentClay", [])
-        if not clay_matches:
-            continue
-
-        match_stats_list = []
-        for cm in clay_matches[:3]:  # get stats for last 3 clay matches
-            mid = cm["matchId"]
-            if not mid:
-                continue
-            pid = PLAYER_IDS.get(player)
-            print(f"  {player} vs {cm['opponent']} ({cm['tournament']} {cm['year']})...",
-                  end=" ", flush=True)
-
-            # Try match-level stats first
-            mstats = get_match_stats(mid)
-            parsed = parse_match_stats(mstats)
-
-            # Try player-level stats
-            pstats = {}
-            if pid:
-                praw = get_player_match_stats(mid, pid)
-                pstats = parse_player_stats(praw)
-
-            if parsed or pstats:
-                print("✓")
-            else:
-                print("empty")
-
-            match_stats_list.append({
-                **cm,
-                "matchStats": parsed,
-                "playerStats": pstats,
-            })
-            time.sleep(0.4)
-
-        player_clay_stats[player] = match_stats_list
-
-    return player_clay_stats
-
-
-def main():
-    # Step 1: Get all player IDs
-    lookup_player_ids()
-
-    # Step 2: Get recent clay matches for each player
-    r16_data = fetch_r16_stats()
-
-    # Step 3: Get stats from those clay matches
-    clay_stats = fetch_recent_clay_match_stats(r16_data)
-
-    # Step 4: Check today's QF matches for any live stats
-    qf_stats = fetch_qf_match_stats()
-
-    # Combine everything
-    output = {
-        "fetchedAt": datetime.now().isoformat(),
-        "playerIds": PLAYER_IDS,
-        "recentClaySummary": {
-            player: {
-                "recentClay": data.get("recentClay", []),
-                "detailedStats": clay_stats.get(player, []),
-            }
-            for player, data in r16_data.items()
-        },
-        "qfMatchStats": qf_stats,
-    }
-
-    with open("player-stats-2026-06-01.json", "w") as f:
-        json.dump(output, f, indent=2, ensure_ascii=False)
-
-    print("\n✓ Done! Upload player-stats-2026-06-01.json to Claude.")
-    print(f"  Players with clay history: "
-          f"{sum(1 for p in r16_data.values() if p.get('recentClay'))}")
-
-
-if __name__ == "__main__":
-    main()
+print(f"\n✓ Saved player-stats-2026-06-01.json — upload this to Claude.")
+has_stats = sum(1 for r in results if r["stats"])
+print(f"  Matches with stats: {has_stats}/{len(results)}")
