@@ -103,7 +103,7 @@ def status_label(raw: str) -> tuple[str, str]:
         return "Live", "inprogress"
     return "Scheduled", "notstarted"
 
-async def scrape_path(page, path: str, mode: str, section: str) -> list:
+async def scrape_path(page, path: str, mode: str, section: str, dump: bool = False) -> list:
     """Navigate to one flashscore path and scrape all match rows."""
     url = f"{BASE_URL}{path}"
     print(f"  → {url} [{mode}]")
@@ -158,6 +158,17 @@ async def scrape_path(page, path: str, mode: str, section: str) -> list:
                 break
         except Exception:
             break
+
+    if dump:
+        slug = path.strip("/").replace("/", "-")
+        dump_path = DATA / "matches" / f"debug-fs-{slug}-{mode}.html"
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        dump_path.write_text(await page.content(), encoding="utf-8")
+        print(f"    [DUMP] saved → {dump_path}")
+
+    # Count all elements to diagnose selector issues
+    all_els = await page.query_selector_all("[class*='event__']")
+    print(f"    [DEBUG] event__ elements on page: {len(all_els)}")
 
     fetched_at = datetime.now(timezone.utc).isoformat()
     matches = []
@@ -264,6 +275,7 @@ async def scrape_path(page, path: str, mode: str, section: str) -> list:
 async def main():
     section = sys.argv[1] if len(sys.argv) > 1 else "atp"
     mode    = sys.argv[2] if len(sys.argv) > 2 else "live"
+    dump    = "--dump" in sys.argv
 
     paths = SECTION_PATHS.get(section, SECTION_PATHS["atp"])
 
@@ -292,7 +304,7 @@ async def main():
 
         all_matches = []
         for path in paths:
-            matches = await scrape_path(page, path, mode, section)
+            matches = await scrape_path(page, path, mode, section, dump=dump)
             all_matches.extend(matches)
 
         await browser.close()
