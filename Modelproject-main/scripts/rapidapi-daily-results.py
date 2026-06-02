@@ -2,14 +2,20 @@
 AstroTennis — Daily RG Results Fetcher
 Run this ON YOUR LOCAL MACHINE each match day.
 
-Step 1: Auto-discovers today's Roland Garros match IDs from schedule
-Step 2: Fetches full stats for any completed matches
-Step 3: Fetches live odds for upcoming matches
-Step 4: Saves everything to results-YYYY-MM-DD.json — upload to Claude
+HOW TO USE:
+  1. Run:  python3 rapidapi-daily-results.py
+  2. Upload the output JSON to Claude → "rebuild PDF"
+
+HOW TO GET MATCH IDs FOR NEW DAYS:
+  Go to sofascore.com → Tennis → Roland Garros
+  Click any match → the number at the end of the URL is the match ID
+  Example: sofascore.com/tennis/match/cobolli-svajda/16198484
+                                                      ^^^^^^^^
+  Add those numbers to MATCH_DATES below under the correct date.
 
 Usage:
-  python3 rapidapi-daily-results.py
-  python3 rapidapi-daily-results.py --date 2026-06-02   # specific date
+  python3 rapidapi-daily-results.py              # uses today's date
+  python3 rapidapi-daily-results.py --date 2026-06-02
 """
 
 import json
@@ -26,15 +32,28 @@ HEADERS_SS = {
 }
 BASE = "https://sofascore.p.rapidapi.com"
 
-# Roland Garros tournament IDs on Sofascore
-# uniqueTournamentId = 495 (Roland Garros ATP)
-# uniqueTournamentId = 496 (Roland Garros WTA)
-RG_TOURNAMENT_IDS = [495, 496]
-
-# ── Fallback: manually add match IDs if discovery fails ───────────────────────
-# Copy match IDs from Sofascore URLs (sofascore.com/tennis/match/XXXXXXXX)
-# Leave empty [] to rely purely on auto-discovery
-MANUAL_MATCH_IDS = []
+# ── ADD MATCH IDs HERE for each day ───────────────────────────────────────────
+# Get IDs from sofascore.com URLs. Add new dates as the tournament progresses.
+MATCH_DATES = {
+    "2026-06-01": [
+        # QF matches — June 1
+        ("16198484", "Cobolli",    "Svajda"),
+        ("16198515", "Cerundolo",  "Berrettini"),
+        ("16198517", "Tiafoe",     "Arnaldi"),
+        ("16198519", "FAA",        "Tabilo"),
+        ("16198473", "Mensik",     "Fonseca"),
+        ("16198476", "Jodar",      "Zverev"),
+        ("16198577", "Potapova",   "Kalinskaya"),
+        ("16198570", "Keys",       "Shnaider"),
+        ("16198571", "Sabalenka",  "Osaka"),
+        ("16198546", "Svitolina",  "Kostyuk"),
+        ("16198539", "Andreeva",   "Cirstea"),
+    ],
+    # ── Add new match days below ───────────────────────────────────────────
+    # "2026-06-03": [
+    #     ("MATCH_ID", "Player1", "Player2"),
+    # ],
+}
 
 
 def get(path, params=None, host="sofascore.p.rapidapi.com"):
@@ -49,93 +68,21 @@ def get(path, params=None, host="sofascore.p.rapidapi.com"):
     return {}
 
 
-def discover_matches(target_date: str) -> list[dict]:
-    """
-    Try multiple endpoints to find today's RG matches.
-    Returns list of {matchId, home, away, status, startTime}
-    """
+def get_matches_for_date(target_date: str) -> list[dict]:
+    """Load matches for a given date from MATCH_DATES lookup."""
+    entries = MATCH_DATES.get(target_date, [])
+    if not entries:
+        print(f"\n⚠  No match IDs found for {target_date}.")
+        print("   To add them:")
+        print("   1. Go to sofascore.com → Tennis → Roland Garros")
+        print("   2. Click a match — the ID is the number at the end of the URL")
+        print(f"   3. Add to MATCH_DATES[\"{target_date}\"] at the top of this script")
+        return []
     matches = []
-    print(f"\n=== Discovering RG matches for {target_date} ===")
-
-    # Endpoint 1: scheduled-events by date (sport=tennis id=1)
-    print("  Trying sport/tennis/scheduled-events...")
-    raw = get(f"/sport/1/scheduled-events/{target_date}")
-    if raw:
-        events = raw.get("events", [])
-        print(f"  Found {len(events)} total tennis events")
-        for e in events:
-            tourn = e.get("tournament", {})
-            uid = tourn.get("uniqueTournament", {}).get("id")
-            if uid in RG_TOURNAMENT_IDS:
-                matches.append(_parse_event(e))
-
-    if not matches:
-        # Endpoint 2: events/list-by-date
-        print("  Trying events/list-by-date...")
-        raw = get("/events/list-by-date", {"sport": "tennis", "date": target_date})
-        if raw:
-            for e in raw.get("events", []):
-                uid = e.get("tournament", {}).get("uniqueTournament", {}).get("id")
-                if uid in RG_TOURNAMENT_IDS:
-                    matches.append(_parse_event(e))
-
-    if not matches:
-        # Endpoint 3: tournament events
-        print("  Trying tournament events endpoint...")
-        for tid in RG_TOURNAMENT_IDS:
-            raw = get(f"/unique-tournament/{tid}/events/last/0")
-            for e in raw.get("events", []):
-                ts = e.get("startTimestamp", 0)
-                e_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
-                if e_date == target_date:
-                    matches.append(_parse_event(e))
-
-    if not matches:
-        # Endpoint 4: try /tournaments/get-rounds style
-        print("  Trying tournament seasons/rounds...")
-        for tid in RG_TOURNAMENT_IDS:
-            # Get current season
-            raw = get(f"/unique-tournament/{tid}/seasons")
-            seasons = raw.get("seasons", [])
-            if seasons:
-                season_id = seasons[0].get("id")
-                rounds_raw = get(f"/unique-tournament/{tid}/season/{season_id}/events/last/0")
-                for e in rounds_raw.get("events", []):
-                    ts = e.get("startTimestamp", 0)
-                    e_date = datetime.fromtimestamp(ts).strftime("%Y-%m-%d") if ts else ""
-                    if e_date == target_date:
-                        matches.append(_parse_event(e))
-
-    # Add any manually specified IDs
-    for mid in MANUAL_MATCH_IDS:
-        if not any(m["matchId"] == str(mid) for m in matches):
-            detail = get("/matches/detail", {"matchId": mid})
-            e = detail.get("event", {})
-            if e:
-                matches.append(_parse_event(e))
-
-    print(f"\n  Found {len(matches)} RG matches for {target_date}")
+    for mid, home, away in entries:
+        matches.append({"matchId": str(mid), "home": home, "away": away})
+    print(f"\n  Loaded {len(matches)} matches for {target_date}")
     return matches
-
-
-def _parse_event(e: dict) -> dict:
-    status = e.get("status", {}).get("type", "unknown")  # "finished", "inprogress", "notstarted"
-    home = (e.get("homeTeam") or e.get("homeScore") or {}).get("name", "?")
-    away = (e.get("awayTeam") or e.get("awayScore") or {}).get("name", "?")
-    # Try homeTeam/awayTeam keys
-    home = e.get("homeTeam", {}).get("name") or home
-    away = e.get("awayTeam", {}).get("name") or away
-    ts = e.get("startTimestamp")
-    round_info = e.get("roundInfo", {}).get("name", "")
-    return {
-        "matchId":   str(e.get("id", "")),
-        "home":      home,
-        "away":      away,
-        "status":    status,
-        "round":     round_info,
-        "startTime": datetime.fromtimestamp(ts).strftime("%H:%M") if ts else "?",
-        "customId":  e.get("customId", ""),
-    }
 
 
 def get_stats(match_id: str) -> dict:
@@ -192,7 +139,9 @@ def get_score(match_id: str) -> dict:
     home_score = e.get("homeScore", {})
     away_score = e.get("awayScore", {})
     winner = e.get("winnerCode")  # 1=home, 2=away
+    status = e.get("status", {}).get("type", "unknown")
     return {
+        "status":     status,
         "homeSets":   home_score.get("current"),
         "awaySets":   away_score.get("current"),
         "homeGames":  home_score.get("normaltime"),
@@ -276,13 +225,10 @@ print(f"\nAstroTennis — Daily Results Fetcher")
 print(f"Target date: {target_date}")
 print("=" * 50)
 
-# Discover matches
-matches = discover_matches(target_date)
+# Load matches for this date
+matches = get_matches_for_date(target_date)
 
 if not matches:
-    print("\n⚠ No matches auto-discovered.")
-    print("  Add match IDs manually to MANUAL_MATCH_IDS list at top of script.")
-    print("  Find IDs on Sofascore: sofascore.com/tennis → click match → ID is in the URL")
     exit(0)
 
 results = []
@@ -291,18 +237,16 @@ for m in matches:
     if not mid:
         continue
 
-    is_finished = m["status"] == "finished"
-    has_score   = m["status"] in ("finished", "inprogress")
+    print(f"\n[{m['home']} vs {m['away']}] ID={mid}")
 
-    print(f"\n[{m['home']} vs {m['away']}] ID={mid} status={m['status']}")
+    # Get score + status from match detail
+    print("  Detail...", end=" ", flush=True)
+    score = get_score(mid)
+    status = score.pop("status", "unknown") if score else "unknown"
+    print(f"status={status}")
+    time.sleep(0.3)
 
-    # Always get score
-    score = {}
-    if has_score:
-        print("  Score...", end=" ", flush=True)
-        score = get_score(mid)
-        print("ok" if score else "empty")
-        time.sleep(0.3)
+    is_finished = status == "finished"
 
     # Stats only for finished matches
     stats = {}
@@ -311,6 +255,8 @@ for m in matches:
         stats = get_stats(mid)
         print(f"{len(stats)} keys" if stats else "no data")
         time.sleep(0.3)
+    else:
+        print(f"  Stats: skipped (match {status})")
 
     # Odds for all matches
     print("  Odds...", end=" ", flush=True)
@@ -320,15 +266,14 @@ for m in matches:
     print(f"{h_am} / {a_am}" if odds else "no odds")
     time.sleep(0.3)
 
-    print_match_summary(m, stats, odds, score)
+    print_match_summary({**m, "status": status, "round": "", "startTime": ""},
+                        stats, odds, score)
 
     results.append({
         "matchId":    mid,
         "home":       m["home"],
         "away":       m["away"],
-        "round":      m["round"],
-        "status":     m["status"],
-        "startTime":  m["startTime"],
+        "status":     status,
         "score":      score,
         "stats":      stats,
         "odds":       odds,
